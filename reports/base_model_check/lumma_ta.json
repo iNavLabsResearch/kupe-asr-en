@@ -1,0 +1,27 @@
+{
+  "language": "ta",
+  "name": "Tamil",
+  "script": "tamil",
+  "avg_fertility": 2.293,
+  "max_fertility": 2.8,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 36,
+  "gen_correct_script_rate": 1.0,
+  "gen_repetitive_rate": 0.0,
+  "gen_samples": [
+    {
+      "prompt": "வாடிக்கையாளர் சேவைக்கு வரவேற்கிறோம்",
+      "output": ". ஒரு வணிகம் அல்லது தனிப்பட்ட வாடிக்கையாளருக்கு, எங்கள் நிபுணத்துவத்துடன் 24/7 ஆதரவு மற்றும் உதவிக்க",
+      "correct_script": true
+    },
+    {
+      "prompt": "தயவுசெய்து உங்கள்",
+      "output": " கண்களைத் திறந்து பார்க்கவும். நீங்கள் அதைச் செய்யும்போது, ​​நீங்கள் மீண்டும் திரும்பி வருவதைப் பார்",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 5.698,
+  "perplexity": 298.1,
+  "fertility_grade": "⚠️",
+  "perplexity_grade": "⚠️"
+}

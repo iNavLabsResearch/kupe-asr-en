@@ -1,0 +1,8 @@
+.env
+artifacts/
+wandb/
+__pycache__/
+*.pyc
+.DS_Store
+*.wav
+.kupe_dl/

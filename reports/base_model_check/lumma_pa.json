@@ -1,0 +1,27 @@
+{
+  "language": "pa",
+  "name": "Punjabi",
+  "script": "gurmukhi",
+  "avg_fertility": 1.47,
+  "max_fertility": 1.778,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 42,
+  "gen_correct_script_rate": 0.5,
+  "gen_repetitive_rate": 0.0,
+  "gen_samples": [
+    {
+      "prompt": "ਗਾਹਕ ਸੇਵਾ ਵਿੱਚ ਤੁਹਾਡਾ ਸੁਆਗਤ ਹੈ",
+      "output": "।\n",
+      "correct_script": false
+    },
+    {
+      "prompt": "ਕਿਰਪਾ ਕਰਕੇ ਆਪਣਾ",
+      "output": " ਵਿਚਾਰ ਦਿਓ।",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 5.017,
+  "perplexity": 151.0,
+  "fertility_grade": "✅",
+  "perplexity_grade": "✅"
+}

@@ -1,0 +1,27 @@
+{
+  "language": "en",
+  "name": "English",
+  "script": "latin",
+  "avg_fertility": 1.382,
+  "max_fertility": 1.778,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 35,
+  "gen_correct_script_rate": 1.0,
+  "gen_repetitive_rate": 0.0,
+  "gen_samples": [
+    {
+      "prompt": "The customer said:",
+      "output": " \"I'll be back in 5 minutes.\" What time is it?\nAnswer:\nQuestion\nThe correct answer to this question,",
+      "correct_script": true
+    },
+    {
+      "prompt": "Please note that your account",
+      "output": " may not be available at all or in some cases, you will need to create a new one.\nBy registering wit",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 3.957,
+  "perplexity": 52.3,
+  "fertility_grade": "✅",
+  "perplexity_grade": "⚠️"
+}

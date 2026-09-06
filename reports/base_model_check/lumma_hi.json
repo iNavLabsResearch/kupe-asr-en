@@ -1,0 +1,27 @@
+{
+  "language": "hi",
+  "name": "Hindi",
+  "script": "devanagari",
+  "avg_fertility": 1.63,
+  "max_fertility": 2.0,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 44,
+  "gen_correct_script_rate": 1.0,
+  "gen_repetitive_rate": 0.5,
+  "gen_samples": [
+    {
+      "prompt": "ग्राहक सेवा में आपका स्वागत है",
+      "output": "। इस लेख में, मैं आपको 2021 में सर्वश्रेष्ठ फ्लाइट बुकिंग वेबसाइट्स के बारे में बताऊंगा।\n2021 में सर",
+      "correct_script": true
+    },
+    {
+      "prompt": "कृपया अपना",
+      "output": " बाध्यकारी होने के लिए एक बार और दोहराएं।\n\"आपके पास जो है वह आपको नहीं मिल सकता, आप इसे कैसे प्राप्त",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 4.955,
+  "perplexity": 141.9,
+  "fertility_grade": "✅",
+  "perplexity_grade": "✅"
+}

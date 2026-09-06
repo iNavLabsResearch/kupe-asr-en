@@ -1,0 +1,50 @@
+{
+  "description": "Phase 1 English-only base-model fit check",
+  "target_languages": ["en"],
+  "en_samples": [
+    {"text": "The quick brown fox jumps over the lazy dog."},
+    {"text": "She sells sea shells by the sea shore."},
+    {"text": "How much wood would a woodchuck chuck if a woodchuck could chuck wood."},
+    {"text": "Peter Piper picked a peck of pickled peppers."},
+    {"text": "I saw Susie sitting in a shoeshine shop."},
+    {"text": "Good morning, thank you for calling customer service."},
+    {"text": "I would like to schedule an appointment for next Tuesday."},
+    {"text": "The weather forecast predicts rain throughout the weekend."},
+    {"text": "Please confirm your appointment at three thirty pm."},
+    {"text": "Transfer five hundred dollars to my savings account."},
+    {"text": "Turn left at the traffic light and go straight for two miles."},
+    {"text": "Set an alarm for six forty five tomorrow morning."},
+    {"text": "What is the status of my order number eight four seven two."},
+    {"text": "Authentication required please enter your four digit pin."},
+    {"text": "The meeting has been rescheduled to Friday at two pm."},
+    {"text": "Unfortunately we are unable to process your request at this time."},
+    {"text": "Press one for sales press two for support press three for billing."},
+    {"text": "Your call is important to us please stay on the line."},
+    {"text": "The train departs from platform number seven at eight fifteen."},
+    {"text": "Could you please repeat that I did not quite catch what you said."}
+  ],
+  "en_generation_prompts": [
+    {"prompt": "The customer said:", "expected_script": "latin"},
+    {"prompt": "In response to your inquiry,", "expected_script": "latin"},
+    {"prompt": "The appointment has been", "expected_script": "latin"},
+    {"prompt": "Please note that your account", "expected_script": "latin"},
+    {"prompt": "Thank you for contacting us regarding", "expected_script": "latin"}
+  ],
+  "en_perplexity_text": [
+    "The quick brown fox jumps over the lazy dog near the riverbank.",
+    "Good afternoon, thank you for reaching out to our support team today.",
+    "I would like to confirm my reservation for two guests on Friday evening.",
+    "The system has successfully processed your payment of one hundred dollars.",
+    "Please verify your email address to complete the registration process.",
+    "Your order will be delivered within three to five business days.",
+    "We apologize for the inconvenience and appreciate your patience.",
+    "The next available appointment is on Wednesday at ten thirty in the morning.",
+    "Press the hash key followed by your account number to continue.",
+    "For security purposes please do not share your password with anyone.",
+    "The train departs from platform number seven at eight fifteen am.",
+    "Could you please repeat that I did not quite catch what you said.",
+    "This call may be recorded for quality and training purposes.",
+    "Your balance is currently two thousand four hundred and fifty dollars.",
+    "Please hold while I transfer your call to the appropriate department."
+  ]
+}

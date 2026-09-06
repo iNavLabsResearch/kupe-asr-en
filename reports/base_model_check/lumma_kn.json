@@ -1,0 +1,27 @@
+{
+  "language": "kn",
+  "name": "Kannada",
+  "script": "kannada",
+  "avg_fertility": 2.227,
+  "max_fertility": 2.833,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 37,
+  "gen_correct_script_rate": 1.0,
+  "gen_repetitive_rate": 0.0,
+  "gen_samples": [
+    {
+      "prompt": "ಗ್ರಾಹಕ ಸೇವೆಗೆ ಸ್ವಾಗತ",
+      "output": "!\n- Automobiles ಹೊಸ ಸುರಕ್ಷಾ ನಿಯಮ, ಕಾರುಗಳಲ್ಲಿ ಡ್ರೈವಿಂಗ್ ಅಸಿಸ್ಟ್ ಸೌಲಭ್ಯ ಕಡ್ಡಾಯ\n-Technology ಒನ್ಪ್ಲಸ್ ನಾ",
+      "correct_script": true
+    },
+    {
+      "prompt": "ದಯವಿಟ್ಟು ನಿಮ್ಮ",
+      "output": " ಖಾತೆಯನ್ನು ರಚಿಸಿ\n- 1000 ಕ್ಕೂ ಹೆಚ್ಚು ಸರ್ಕಾರಿ ಉದ್ಯೋಗಗಳ ನೇಮಕಾತಿ\n- 250ಕ್ಕೂ ಹೆಚ್ಚು ಉದ್ಯೋಗಗಳಿಗಾಗಿ ಅಪ್ಲಿಕೇಶ",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 5.284,
+  "perplexity": 197.1,
+  "fertility_grade": "⚠️",
+  "perplexity_grade": "✅"
+}

@@ -1,0 +1,27 @@
+{
+  "language": "gu",
+  "name": "Gujarati",
+  "script": "gujarati",
+  "avg_fertility": 1.596,
+  "max_fertility": 2.0,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 44,
+  "gen_correct_script_rate": 1.0,
+  "gen_repetitive_rate": 0.0,
+  "gen_samples": [
+    {
+      "prompt": "ગ્રાહક સેવામાં આપનું સ્વાગત છે",
+      "output": ". આપને દરરોજની રસોઈ બનાવવા માટે જરૂરી સામગ્રી મળી રહેશે.\nઆ ઉપરાંત, તમે તમારા મિત્રો અને પરિવાર સાથે ",
+      "correct_script": true
+    },
+    {
+      "prompt": "કૃપા કરીને તમારો",
+      "output": " પ્રેમ છે.",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 5.066,
+  "perplexity": 158.5,
+  "fertility_grade": "✅",
+  "perplexity_grade": "✅"
+}

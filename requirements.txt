@@ -1,0 +1,32 @@
+# --- core ML ---
+# Install torch FIRST, matched to your CUDA. Example (CUDA 12.4):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch>=2.4
+
+# Lumma-0.6B-Base ships custom modeling code that REQUIRES transformers 5.4.0.
+# This pin is load-bearing — 4.x cannot import LummaForCausalLM / LummaTokenizer.
+transformers==5.4.0
+tokenizers>=0.22
+huggingface_hub>=0.34
+datasets>=2.20
+accelerate>=1.1.0        # transformers 5.4 Trainer requires this
+
+# --- audio ---
+soundfile>=0.12          # FLAC/OPUS/WAV encode+decode for the `raw` config
+librosa>=0.10
+soxr>=0.3                # fast resampling backend for librosa
+pyarrow>=15              # parquet shards + streaming bunch compaction
+
+# --- metrics / tracking ---
+jiwer>=3.0               # WER / CER
+wandb>=0.17
+
+# --- utils ---
+python-dotenv>=1.0
+pyyaml>=6.0
+tqdm>=4.66
+numpy>=1.24
+
+# --- optional ---
+# pyrnnoise>=0.4.0       # RNNoise before streaming ASR (mic demo); passthrough if absent
+# sounddevice>=0.4       # live mic demo (scripts/06_mic_stream.py)

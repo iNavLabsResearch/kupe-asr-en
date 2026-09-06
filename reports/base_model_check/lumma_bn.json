@@ -1,0 +1,27 @@
+{
+  "language": "bn",
+  "name": "Bengali",
+  "script": "bengali",
+  "avg_fertility": 1.768,
+  "max_fertility": 2.25,
+  "roundtrip_rate": 1.0,
+  "sample_unique_chars": 40,
+  "gen_correct_script_rate": 0.5,
+  "gen_repetitive_rate": 0.0,
+  "gen_samples": [
+    {
+      "prompt": "গ্রাহক সেবায় আপনাকে স্বাগতম",
+      "output": "।",
+      "correct_script": false
+    },
+    {
+      "prompt": "দয়া করে আপনার",
+      "output": " কাছে পাঠিয়ে দিন।",
+      "correct_script": true
+    }
+  ],
+  "avg_loss": 4.697,
+  "perplexity": 109.6,
+  "fertility_grade": "✅",
+  "perplexity_grade": "✅"
+}

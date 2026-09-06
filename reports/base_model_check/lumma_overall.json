@@ -1,0 +1,356 @@
+{
+  "model": "FrontiersMind/Lumma-0.6B-Base",
+  "transformers": "5.4.0",
+  "weights_healthy": true,
+  "vocab_size": 131072,
+  "vocab_script_coverage": {
+    "latin": 191,
+    "devanagari": 80,
+    "bengali": 60,
+    "gurmukhi": 65,
+    "gujarati": 73,
+    "odia": 59,
+    "tamil": 46,
+    "telugu": 65,
+    "kannada": 71,
+    "malayalam": 67
+  },
+  "per_language": {
+    "en": {
+      "language": "en",
+      "name": "English",
+      "script": "latin",
+      "avg_fertility": 1.382,
+      "max_fertility": 1.778,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 35,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "The customer said:",
+          "output": " \"I'll be back in 5 minutes.\" What time is it?\nAnswer:\nQuestion\nThe correct answer to this question,",
+          "correct_script": true
+        },
+        {
+          "prompt": "Please note that your account",
+          "output": " may not be available at all or in some cases, you will need to create a new one.\nBy registering wit",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 3.957,
+      "perplexity": 52.3,
+      "fertility_grade": "✅",
+      "perplexity_grade": "⚠️",
+      "indic_usable_tokenizer": true
+    },
+    "hi": {
+      "language": "hi",
+      "name": "Hindi",
+      "script": "devanagari",
+      "avg_fertility": 1.63,
+      "max_fertility": 2.0,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 44,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.5,
+      "gen_samples": [
+        {
+          "prompt": "ग्राहक सेवा में आपका स्वागत है",
+          "output": "। इस लेख में, मैं आपको 2021 में सर्वश्रेष्ठ फ्लाइट बुकिंग वेबसाइट्स के बारे में बताऊंगा।\n2021 में सर",
+          "correct_script": true
+        },
+        {
+          "prompt": "कृपया अपना",
+          "output": " बाध्यकारी होने के लिए एक बार और दोहराएं।\n\"आपके पास जो है वह आपको नहीं मिल सकता, आप इसे कैसे प्राप्त",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 4.955,
+      "perplexity": 141.9,
+      "fertility_grade": "✅",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "bn": {
+      "language": "bn",
+      "name": "Bengali",
+      "script": "bengali",
+      "avg_fertility": 1.768,
+      "max_fertility": 2.25,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 40,
+      "gen_correct_script_rate": 0.5,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "গ্রাহক সেবায় আপনাকে স্বাগতম",
+          "output": "।",
+          "correct_script": false
+        },
+        {
+          "prompt": "দয়া করে আপনার",
+          "output": " কাছে পাঠিয়ে দিন।",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 4.697,
+      "perplexity": 109.6,
+      "fertility_grade": "✅",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "ta": {
+      "language": "ta",
+      "name": "Tamil",
+      "script": "tamil",
+      "avg_fertility": 2.293,
+      "max_fertility": 2.8,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 36,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "வாடிக்கையாளர் சேவைக்கு வரவேற்கிறோம்",
+          "output": ". ஒரு வணிகம் அல்லது தனிப்பட்ட வாடிக்கையாளருக்கு, எங்கள் நிபுணத்துவத்துடன் 24/7 ஆதரவு மற்றும் உதவிக்க",
+          "correct_script": true
+        },
+        {
+          "prompt": "தயவுசெய்து உங்கள்",
+          "output": " கண்களைத் திறந்து பார்க்கவும். நீங்கள் அதைச் செய்யும்போது, ​​நீங்கள் மீண்டும் திரும்பி வருவதைப் பார்",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 5.698,
+      "perplexity": 298.1,
+      "fertility_grade": "⚠️",
+      "perplexity_grade": "⚠️",
+      "indic_usable_tokenizer": true
+    },
+    "te": {
+      "language": "te",
+      "name": "Telugu",
+      "script": "telugu",
+      "avg_fertility": 2.143,
+      "max_fertility": 2.667,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 38,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "కస్టమర్ సేవకు స్వాగతం",
+          "output": ". మీ ఖాతాదారులకు సహాయం చేయడానికి మరియు వారి కొనుగోలు ప్రక్రియను సులభతరం చేయడానికి మేము ఈ విధానాన్ని ",
+          "correct_script": true
+        },
+        {
+          "prompt": "దయచేసి మీ",
+          "output": " అమ్మాయికి కూడా చెప్పండి. మీరు ఆమెతో మాట్లాడిన తర్వాత, మీకు ఈ విషయం తెలుస్తుంది మరియు అది మంచిది.\nఆమ",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 5.133,
+      "perplexity": 169.5,
+      "fertility_grade": "⚠️",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "mr": {
+      "language": "mr",
+      "name": "Marathi",
+      "script": "devanagari",
+      "avg_fertility": 1.929,
+      "max_fertility": 2.4,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 44,
+      "gen_correct_script_rate": 0.5,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "ग्राहक सेवेत आपले स्वागत आहे",
+          "output": ".",
+          "correct_script": false
+        },
+        {
+          "prompt": "कृपया तुमचा",
+          "output": " मित्र असेल तर, मला सांगा की, तू माझा नवरा होणार आहे का?\nमाझ्या आयुष्यातल्या या छोट्याश्या प्रश्नाला",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 4.879,
+      "perplexity": 131.5,
+      "fertility_grade": "✅",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "gu": {
+      "language": "gu",
+      "name": "Gujarati",
+      "script": "gujarati",
+      "avg_fertility": 1.596,
+      "max_fertility": 2.0,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 44,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "ગ્રાહક સેવામાં આપનું સ્વાગત છે",
+          "output": ". આપને દરરોજની રસોઈ બનાવવા માટે જરૂરી સામગ્રી મળી રહેશે.\nઆ ઉપરાંત, તમે તમારા મિત્રો અને પરિવાર સાથે ",
+          "correct_script": true
+        },
+        {
+          "prompt": "કૃપા કરીને તમારો",
+          "output": " પ્રેમ છે.",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 5.066,
+      "perplexity": 158.5,
+      "fertility_grade": "✅",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "kn": {
+      "language": "kn",
+      "name": "Kannada",
+      "script": "kannada",
+      "avg_fertility": 2.227,
+      "max_fertility": 2.833,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 37,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "ಗ್ರಾಹಕ ಸೇವೆಗೆ ಸ್ವಾಗತ",
+          "output": "!\n- Automobiles ಹೊಸ ಸುರಕ್ಷಾ ನಿಯಮ, ಕಾರುಗಳಲ್ಲಿ ಡ್ರೈವಿಂಗ್ ಅಸಿಸ್ಟ್ ಸೌಲಭ್ಯ ಕಡ್ಡಾಯ\n-Technology ಒನ್ಪ್ಲಸ್ ನಾ",
+          "correct_script": true
+        },
+        {
+          "prompt": "ದಯವಿಟ್ಟು ನಿಮ್ಮ",
+          "output": " ಖಾತೆಯನ್ನು ರಚಿಸಿ\n- 1000 ಕ್ಕೂ ಹೆಚ್ಚು ಸರ್ಕಾರಿ ಉದ್ಯೋಗಗಳ ನೇಮಕಾತಿ\n- 250ಕ್ಕೂ ಹೆಚ್ಚು ಉದ್ಯೋಗಗಳಿಗಾಗಿ ಅಪ್ಲಿಕೇಶ",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 5.284,
+      "perplexity": 197.1,
+      "fertility_grade": "⚠️",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "ml": {
+      "language": "ml",
+      "name": "Malayalam",
+      "script": "malayalam",
+      "avg_fertility": 3.117,
+      "max_fertility": 3.333,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 43,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "ഉപഭോക്തൃ സേവനത്തിലേക്ക് സ്വാഗതം",
+          "output": " ചെയ്യുന്നു.",
+          "correct_script": true
+        },
+        {
+          "prompt": "ദയവായി നിങ്ങളുടെ",
+          "output": " ഫോൺ നമ്പർ ടൈപ്പ് ചെയ്യുക\nനിങ്ങളുടെ ഫോണിലെ നമ്പറില് നിന്നും 9090999009 എന്ന നമ്പരിലേക്ക് വാട്സാപ്പ് ",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 4.769,
+      "perplexity": 117.8,
+      "fertility_grade": "❌",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": false
+    },
+    "pa": {
+      "language": "pa",
+      "name": "Punjabi",
+      "script": "gurmukhi",
+      "avg_fertility": 1.47,
+      "max_fertility": 1.778,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 42,
+      "gen_correct_script_rate": 0.5,
+      "gen_repetitive_rate": 0.0,
+      "gen_samples": [
+        {
+          "prompt": "ਗਾਹਕ ਸੇਵਾ ਵਿੱਚ ਤੁਹਾਡਾ ਸੁਆਗਤ ਹੈ",
+          "output": "।\n",
+          "correct_script": false
+        },
+        {
+          "prompt": "ਕਿਰਪਾ ਕਰਕੇ ਆਪਣਾ",
+          "output": " ਵਿਚਾਰ ਦਿਓ।",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 5.017,
+      "perplexity": 151.0,
+      "fertility_grade": "✅",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    },
+    "or": {
+      "language": "or",
+      "name": "Odia",
+      "script": "odia",
+      "avg_fertility": 2.334,
+      "max_fertility": 3.0,
+      "roundtrip_rate": 1.0,
+      "sample_unique_chars": 42,
+      "gen_correct_script_rate": 1.0,
+      "gen_repetitive_rate": 0.5,
+      "gen_samples": [
+        {
+          "prompt": "ଗ୍ରାହକ ସେବାରେ ଆପଣଙ୍କୁ ସ୍ୱାଗତ",
+          "output": "। ଆମେ ଆପଣଙ୍କୁ ଭଲ ସେବା ପ୍ରଦାନ କରିବା ପାଇଁ ଆମର ପ୍ରଯ଼ାସ ଜାରି ରଖିବୁ।\nଆମ ସହିତ ଯୋଗାଯୋଗ କରନ୍ତୁ\nନମସ୍କାର, ନମସ୍",
+          "correct_script": true
+        },
+        {
+          "prompt": "ଦୟାକରି ଆପଣଙ୍କ",
+          "output": " ଦ୍ଵାରା ହୋଇଥିବା ପାପର ପଚା ହୋଇ ନଥାଏ। ଆପଣ ନିଜ ଜୀବନସାଥୀ ସହିତ ଭଲ ସମ୍ପର୍କ ରଖନ୍ତୁ।\nମକର ରାଶି – ଏହି ରାଶିର ବ୍�",
+          "correct_script": true
+        }
+      ],
+      "avg_loss": 4.866,
+      "perplexity": 129.8,
+      "fertility_grade": "⚠️",
+      "perplexity_grade": "✅",
+      "indic_usable_tokenizer": true
+    }
+  },
+  "summary": {
+    "languages_tested": [
+      "en",
+      "hi",
+      "bn",
+      "ta",
+      "te",
+      "mr",
+      "gu",
+      "kn",
+      "ml",
+      "pa",
+      "or"
+    ],
+    "tokenizer_usable": [
+      "en",
+      "hi",
+      "bn",
+      "ta",
+      "te",
+      "mr",
+      "gu",
+      "kn",
+      "pa",
+      "or"
+    ],
+    "high_perplexity": []
+  }
+}
