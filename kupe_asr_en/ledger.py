@@ -125,6 +125,7 @@ class SeenSet:
     """Exact-once clip fingerprints, backed by an append-only text sidecar file."""
 
     def __init__(self, path: str):
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self.path = path
         self.s: set[str] = set()
         if os.path.isfile(path):
