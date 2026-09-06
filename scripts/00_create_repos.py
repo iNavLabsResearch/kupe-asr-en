@@ -14,7 +14,7 @@ from kupe_asr_en.env import ensure_repo, hf_login, log, upload_file
 
 
 CARD = """---
-license: mixed
+license: other
 task_categories: [automatic-speech-recognition]
 language: [en]
 tags: [asr, mimi, lumma, kupe]
