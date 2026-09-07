@@ -162,7 +162,7 @@ kupe_asr_en/
   data/ sources.py fetch.py encode.py shards.py bunch.py   the data factory
   modeling/ frontend.py asr_model.py             audio frontend + Lumma wrapper
   collate.py dataset.py evaluate.py train.py stream.py
-scripts/ 00..06             one file per stage (05 = data gate, 06 = mic)
+scripts/ 00..06 + 10_gradio_kaggle   stages + Kaggle Gradio demo
 ```
 
 ---
@@ -180,3 +180,22 @@ scripts/ 00..06             one file per stage (05 = data gate, 06 = mic)
   eval reports a **silence→empty rate** (target >95%) alongside WER/CER.
 - **W&B** logs train/val loss, live WER/CER, silence→empty; disabled cleanly if no key is set.
 - If Lumma ever fails to load, the fix is almost always `pip install transformers==5.4.0`.
+
+---
+
+## 8. Kaggle Gradio demo (T4×2 or P100×1)
+
+Public weights, **no HF token**. Accelerator: **GPU T4×2** (pipeline: Mimi on
+`cuda:0`, Kupe-LM on `cuda:1`) or **P100×1**. Enable **Internet**.
+
+```bash
+!git clone https://github.com/iNavLabsResearch/kupe-asr-en.git
+%cd kupe-asr-en
+# Do NOT reinstall torch — Kaggle already ships CUDA torch.
+!pip install -q "transformers==5.4.0" "tokenizers>=0.22" accelerate huggingface_hub \
+    librosa soundfile soxr pyyaml numpy gradio
+!python scripts/10_gradio_kaggle.py --share
+```
+
+Open the printed `https://*.gradio.live` URL. Upload audio → **Full file** (whole
+clip) or **Realtime chunks** (growing transcript + RTF).
