@@ -119,8 +119,7 @@ def encode(cfg) -> str:
         nonlocal pending, pending_rows, bunch_idx
         if not pending or (not force and pending_rows < rows_per_bunch):
             return
-        n = max(1, pending_rows // rows_per_bunch) if not force else max(1, round(pending_rows / rows_per_bunch))
-        bunches = compact_to_bunches(pending, P["bunches"], n, start_index=bunch_idx,
+        bunches = compact_to_bunches(pending, P["bunches"], rows_per_bunch, start_index=bunch_idx,
                                      soft_gb=float(cfg.data.bunch_soft_gb))
         if cfg.mimi.push and bunches:
             led.save()

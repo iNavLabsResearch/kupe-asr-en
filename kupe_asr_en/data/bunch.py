@@ -40,21 +40,20 @@ def _readable_shards(shard_paths: list[str]) -> list[str]:
     return good
 
 
-def compact_to_bunches(shard_paths: list[str], out_dir: str, target_shards: int,
+def compact_to_bunches(shard_paths: list[str], out_dir: str, rows_per_bunch: int,
                        start_index: int = 0, batch_rows: int = 512,
                        soft_gb: float = 6.0) -> list[str]:
-    """Stream `shard_paths` into ~`target_shards` bunch parquet files in `out_dir`.
+    """Stream `shard_paths` into bunch parquet files of ~`rows_per_bunch` rows each.
 
-    Returns the list of written bunch file paths. Rows are distributed evenly by
-    count; a warning fires if a bunch exceeds `soft_gb` (raise target_shards or use
-    audio_format=opus if so).
+    Size-bounded: a new bunch starts every `rows_per_bunch` rows, so the file size is
+    the same no matter how many shards are pending (a huge crash backlog produces many
+    small bunches, never one giant one). Returns the written bunch file paths.
     """
     shard_paths = _readable_shards(shard_paths)
     if not shard_paths:
         return []
     os.makedirs(out_dir, exist_ok=True)
-    total = _total_rows(shard_paths)
-    per_bunch = max(1, -(-total // max(1, target_shards)))   # ceil
+    per_bunch = max(1, int(rows_per_bunch))
     schema = pq.ParquetFile(shard_paths[0]).schema_arrow
 
     written: list[str] = []

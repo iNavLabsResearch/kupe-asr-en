@@ -131,10 +131,7 @@ def fetch(cfg, *, reset: bool = False) -> str:
         nonlocal pending, pending_rows, bunch_idx
         if not pending or (not force and pending_rows < rows_per_bunch):
             return
-        n_bunches = max(1, round(pending_rows / rows_per_bunch)) if force else \
-            pending_rows // rows_per_bunch
-        n_bunches = max(1, n_bunches)
-        bunches = compact_to_bunches(pending, P["bunches"], n_bunches,
+        bunches = compact_to_bunches(pending, P["bunches"], rows_per_bunch,
                                      start_index=bunch_idx, soft_gb=float(cfg.data.bunch_soft_gb))
         if cfg.data.push and bunches:
             ledger.save()
