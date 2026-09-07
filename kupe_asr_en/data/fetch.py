@@ -174,8 +174,15 @@ def fetch(cfg, *, reset: bool = False) -> str:
 
     for name, s in d["sources"].items():
         cap_s = float(s["cap_h"]) * 3600.0
-        if cap_s <= 0 or s["status"] == "done" or s["kept_h"] * 3600.0 >= cap_s:
-            s["status"] = "done" if s["kept_h"] * 3600.0 >= cap_s else s["status"]
+        has_clips = int(s.get("clips", 0)) > 0
+        if cap_s <= 0:
+            continue
+        if s["kept_h"] * 3600.0 >= cap_s:
+            s["status"] = "done"
+            continue
+        # skip only sources that truly finished WITH data; a 'done' source that
+        # produced 0 clips (e.g. a gate that was later granted) is retried.
+        if s["status"] == "done" and has_clips:
             continue
         try:
             src = get_source(name)
@@ -188,6 +195,8 @@ def fetch(cfg, *, reset: bool = False) -> str:
         got_s = float(s["kept_h"]) * 3600.0
         clips = int(s["clips"])
         files_done = int(s["files_done"])
+        if clips == 0:
+            files_done = 0        # never yielded anything -> re-read from file 0
 
         pbar = tqdm(total=cap_s / 3600.0, initial=got_s / 3600.0, unit="h",
                     desc=f"fetch {name}",
@@ -275,12 +284,13 @@ def fetch(cfg, *, reset: bool = False) -> str:
                 ledger.save()
         pbar.close()
         s["files_done"] = files_done
-        s["status"] = "done"
+        # a 0-clip source stays retryable (gate may be granted later); don't lock it 'done'
+        s["status"] = "done" if int(s["clips"]) > 0 else "pending"
         seen.flush()
         ledger.save()
-        log.info("source %s done: %.1f h, %d clips", name, s["kept_h"], s["clips"])
+        log.info("source %s %s: %.1f h, %d clips", name, s["status"], s["kept_h"], s["clips"])
         if s["clips"] == 0:
-            log.warning("source %s produced 0 clips — check gate/access", name)
+            log.warning("source %s produced 0 clips — check gate/access (will retry next run)", name)
 
     # === anti-hallucination: inject silence/ambient clips labeled "" ===========
     sil = d.setdefault("silence", {"clips": 0, "hours": 0.0, "done": False})
