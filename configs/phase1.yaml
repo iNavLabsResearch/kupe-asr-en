@@ -40,7 +40,8 @@ mimi:
                              # uploaded+deleted per wave, so disk stays bounded. Raise to 2-3
                              # only on a bigger disk for more GPU/download overlap.
   decode_workers: 16         # threads decoding FLAC bytes -> waveforms (CPU parallelism)
-  mimi_wave_rows: 50000      # mimi rows per uploaded bunch (~250MB); ~15 bunches for 750k rows
+  mimi_wave_rows: 50000      # mimi rows per uploaded bunch (~250MB)
+  decode_chunk: 3000         # clips decoded into RAM before a GPU batch (bounds RAM; GPU starts fast)
   push: true
 
 # ------------------------------------------------------------------ data (English only)

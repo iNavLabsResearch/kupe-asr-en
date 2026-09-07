@@ -222,6 +222,19 @@ def encode(cfg) -> str:
         except Exception:
             return None, rec
 
+    chunk_clips = int(getattr(cfg.mimi, "decode_chunk", 3000))
+
+    def _emit(clips):
+        clips.sort(key=lambda c: len(c[0]))            # length-sort within chunk -> less padding
+        arrays, metas, frames = [], [], 0
+        for arr, rec in clips:
+            nf = _frames_of(rec["duration"])
+            if arrays and frames + nf > budget_total:
+                batchq.put(("batch", arrays, metas)); arrays, metas, frames = [], [], 0
+            arrays.append(arr); metas.append(rec); frames += nf
+        if arrays:
+            batchq.put(("batch", arrays, metas))
+
     def decoder():
         cols = ["id", "source", "text", "duration", "split", "audio_bytes"]
         while True:
@@ -229,24 +242,19 @@ def encode(cfg) -> str:
             if item is _DONE:
                 break
             af, d, local = item
-            clips = []
             try:
                 pf = pq.ParquetFile(local)
+                chunk = []
                 for b in pf.iter_batches(batch_size=64, columns=cols):
                     for arr, rec in decode_pool.map(_decode, b.to_pylist()):
                         if arr is not None and rec.get("duration"):
-                            clips.append((arr, rec))
+                            chunk.append((arr, rec))
+                            if len(chunk) >= chunk_clips:   # emit chunks -> bounded RAM, GPU starts fast
+                                _emit(chunk); chunk = []
+                if chunk:
+                    _emit(chunk)
             finally:
                 shutil.rmtree(d, ignore_errors=True)
-            clips.sort(key=lambda c: len(c[0]))        # length-sort -> minimal padding
-            arrays, metas, frames = [], [], 0
-            for arr, rec in clips:
-                nf = _frames_of(rec["duration"])
-                if arrays and frames + nf > budget_total:
-                    batchq.put(("batch", arrays, metas)); arrays, metas, frames = [], [], 0
-                arrays.append(arr); metas.append(rec); frames += nf
-            if arrays:
-                batchq.put(("batch", arrays, metas))
             batchq.put(("file", af))
         batchq.put(_DONE)
 
@@ -256,7 +264,9 @@ def encode(cfg) -> str:
     # ---- main GPU consumer ----
     processed, base, total = 0, len(done), len(raw_bunches)
     hours = float(led.d["encoded_hours"])
+    hours0, clips0 = hours, int(led.d["clips"])
     t0 = time.time()
+    last = 0.0
     while True:
         item = batchq.get()
         if item is _DONE:
@@ -267,6 +277,14 @@ def encode(cfg) -> str:
             hours += sum(m["duration"] for m in metas) / 3600.0
             led.d["clips"] += len(metas)
             led.d["encoded_hours"] = round(hours, 4)
+            now = time.time()                          # live loader (throttled to every 5s)
+            if now - last >= 5:
+                last = now
+                el = max(1e-6, now - t0)
+                hph = (hours - hours0) / (el / 3600)   # audio-hours encoded per wall-hour
+                eta = (2707.4 - hours) / hph if hph > 0 else 0
+                log.info("  …encoding | %d clips | %.1f h done | %.0f h/h | ~%.1f h left",
+                         led.d["clips"] - clips0, hours, hph, max(0, eta))
         else:                                          # a raw bunch finished
             af = item[1]
             led.d["raw_files_done"] = sorted(set(led.d["raw_files_done"]) | {af})
