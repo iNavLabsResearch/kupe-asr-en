@@ -34,7 +34,11 @@ mimi:
   model_id: kyutai/mimi
   num_codebooks: 8           # encode c0..c7 once; training selects how many to use
   batch_max_frames: 8000     # sum-of-frames VRAM budget per encode batch PER GPU (raise on big cards)
-  prefetch: 3                # raw bunches kept downloaded ahead of the GPU (each ~2GB)
+  prefetch: 1                # raw bunches kept downloaded ahead of the GPU. 80GB-disk safe:
+                             # some raw bunches are ~16GB, so ~3 in flight ≈ 48GB worst case.
+                             # Each bunch is DELETED right after decode, and mimi output is
+                             # uploaded+deleted per wave, so disk stays bounded. Raise to 2-3
+                             # only on a bigger disk for more GPU/download overlap.
   decode_workers: 16         # threads decoding FLAC bytes -> waveforms (CPU parallelism)
   mimi_wave_rows: 50000      # mimi rows per uploaded bunch (~250MB); ~15 bunches for 750k rows
   push: true
