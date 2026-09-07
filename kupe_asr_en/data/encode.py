@@ -1,22 +1,27 @@
-"""Stage 2 — Mimi-encode the `raw` config into the `mimi` config (c0..c7 codes).
+"""Stage 2 — Mimi-encode the `raw` config into `mimi` (c0..c7), fast + resumable.
 
-Reads ONLY from the Hub (never local raw): downloads one `raw` bunch parquet at a
-time, decodes its clips, batches them by frame budget, runs kyutai/mimi to get all
-8 codebooks, and writes `mimi` shards that are rolled into ~`mimi_target_shards`
-bunches on the Hub. Resumable via the mimi ledger (which raw bunches are done).
+Pipelined so the GPU never waits:
+  [downloader thread] prefetch raw bunches from the Hub (bounded by disk)
+     -> [decoder: thread pool] FLAC-decode clips into length-sorted, frame-budget batches
+        -> [GPU pool] Mimi-encode across ALL GPUs (round-robin, OOM auto-split)
+           -> [uploader] pack mimi shards into bunches, commit (paced), delete locally
 
-We always encode all 8 codebooks so the training A/B (per_frame_sum c0-c7 vs
-flatten c0-c3) can be run without re-encoding.
+Resumable via the mimi ledger (which raw bunches are done). Reads ONLY from the
+Hub. Encodes all 8 codebooks so the per_frame_sum vs flatten A/B needs no re-encode.
+Run inside tmux; a killed run resumes at the next unfinished raw bunch.
 """
 from __future__ import annotations
 
 import math
 import os
+import queue
 import shutil
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from tqdm import tqdm
 
 from ..audio import decode_bytes
 from ..constants import CONFIG_MIMI, CONFIG_RAW, MIMI_FRAME_RATE
@@ -26,28 +31,26 @@ from ..ledger import Ledger, new_mimi_ledger
 from .bunch import compact_to_bunches, upload_bunches
 from .shards import MIMI_SCHEMA, ShardWriter, list_local_shards
 
+_DONE = object()
+
 
 def _paths(cfg):
     m = cfg.paths.mimi_dir
-    return {
-        "shards": os.path.join(m, "shards"),
-        "bunches": os.path.join(m, "bunches"),
-        "dl": os.path.join(m, "dl"),
-        "ledger": os.path.join(cfg.paths.ledger_dir, "mimi.json"),
-    }
-
-
-def _pick_device():
-    import torch
-    if torch.cuda.is_available():
-        return "cuda"
-    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+    return {"shards": os.path.join(m, "shards"), "bunches": os.path.join(m, "bunches"),
+            "dl": os.path.join(m, "dl"), "ledger": os.path.join(cfg.paths.ledger_dir, "mimi.json")}
 
 
 def _frames_of(dur: float) -> int:
     return max(1, int(math.ceil(dur * MIMI_FRAME_RATE)))
+
+
+def _devices():
+    import torch
+    if torch.cuda.is_available():
+        return [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return ["mps"]
+    return ["cpu"]
 
 
 def _load(cfg):
@@ -60,34 +63,41 @@ def _load(cfg):
 
 def status(cfg) -> dict:
     ensure_repo(cfg.repos.data, "dataset")
-    token = require_token()
-    raw_bunches, _ = list_config_parquets(cfg.repos.data, CONFIG_RAW, token)
+    raw, _ = list_config_parquets(cfg.repos.data, CONFIG_RAW, require_token())
     led = _load(cfg)
     done = set(led.d["raw_files_done"])
-    left = [f for f in raw_bunches if f not in done]
-    log.info("encode: %d/%d raw bunches done, %d LEFT | encoded=%.1fh clips=%d hub_bunches=%d",
-             len(done), len(raw_bunches), len(left), led.d["encoded_hours"],
-             led.d["clips"], led.d["shards"]["hub_bunches"])
-    return {"total": len(raw_bunches), "done": len(done), "left": len(left)}
+    left = [f for f in raw if f not in done]
+    log.info("encode: %d/%d raw bunches done, %d LEFT | encoded=%.1fh clips=%d mimi_bunches=%d",
+             len(done), len(raw), len(left), led.d["encoded_hours"], led.d["clips"],
+             led.d["shards"]["hub_bunches"])
+    return {"total": len(raw), "done": len(done), "left": len(left)}
 
 
 def encode(cfg) -> str:
     import torch
     from huggingface_hub import hf_hub_download
     from transformers import MimiModel
+    import pyarrow.parquet as pq
 
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     ensure_repo(cfg.repos.data, "dataset")
     token = require_token()
     P = _paths(cfg)
-    for d in (P["shards"], P["bunches"], P["dl"]):
-        os.makedirs(d, exist_ok=True)
+    for d in P.values():
+        if not d.endswith(".json"):
+            os.makedirs(d, exist_ok=True)
 
-    device = _pick_device()
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    devices = _devices()
+    nd = len(devices)
+    use_cuda = devices[0].startswith("cuda")
+    dtype = torch.float16 if use_cuda else torch.float32
     n_cb = int(cfg.mimi.num_codebooks)
     budget = int(cfg.mimi.batch_max_frames)
-    log.info("Mimi encode on %s | codebooks=%d | frame budget=%d", device, n_cb, budget)
-    mimi = MimiModel.from_pretrained(cfg.mimi.model_id, token=hf_token()).to(device).eval()
+    budget_total = budget * nd
+    log.info("Mimi encode on %s | codebooks=%d | batch=%d frames/GPU", devices, n_cb, budget)
+    models = [MimiModel.from_pretrained(cfg.mimi.model_id, token=hf_token()).to(dv).eval()
+              for dv in devices]
 
     raw_bunches, _ = list_config_parquets(cfg.repos.data, CONFIG_RAW, token)
     if not raw_bunches:
@@ -100,26 +110,19 @@ def encode(cfg) -> str:
         log.info("nothing to encode."); return cfg.repos.data
 
     pacer = CommitPacer(float(cfg.data.commit_min_interval_s))
-    # even rows/bunch so final mimi file count ~= mimi_target_shards. Use the true
-    # total clip count from the data ledger (falls back to a rough estimate).
-    data_led = Ledger(os.path.join(cfg.paths.ledger_dir, "data.json"), repo_id=cfg.repos.data,
-                      path_in_repo="ledger/data.json", default={})
-    data_led.sync_from_hub()
-    total_clips = int((data_led.d.get("totals") or {}).get("clips", 0)) or \
-        int(float(cfg.data.target_hours) * 3600 / 10.0)     # ~10s/clip fallback
-    rows_per_bunch = max(int(cfg.data.shard_rows),
-                         total_clips // int(cfg.data.mimi_target_shards) or int(cfg.data.shard_rows))
+    rows_per_bunch = max(int(cfg.data.shard_rows), int(getattr(cfg.mimi, "mimi_wave_rows", 50000)))
     bunch_idx = max(int(led.d["shards"].get("hub_bunches", 0)),
                     next_bunch_index([f"{CONFIG_MIMI}/data/{b}" for b in led.d["shards"].get("bunch_files", [])]))
-
     pending: list[str] = []
     pending_rows = 0
+    lock = threading.Lock()
 
     def _upload_wave(force=False):
         nonlocal pending, pending_rows, bunch_idx
         if not pending or (not force and pending_rows < rows_per_bunch):
             return
-        bunches = compact_to_bunches(pending, P["bunches"], rows_per_bunch, start_index=bunch_idx,
+        take, pending, pending_rows = pending, [], 0
+        bunches = compact_to_bunches(take, P["bunches"], rows_per_bunch, start_index=bunch_idx,
                                      soft_gb=float(cfg.data.bunch_soft_gb))
         if cfg.mimi.push and bunches:
             led.save()
@@ -128,22 +131,18 @@ def encode(cfg) -> str:
             bunch_idx += len(bunches)
             led.d["shards"]["hub_bunches"] = bunch_idx
             led.d["shards"]["bunch_files"] = [f"bunch_{i:05d}.parquet" for i in range(bunch_idx)]
-        for p in pending:
+        for p in take:
             try:
                 os.remove(p)
             except OSError:
                 pass
-        pending, pending_rows = [], 0
         led.save()
 
     def on_flush(path, idx, nrows):
-        nonlocal pending, pending_rows
+        nonlocal pending_rows
         pending.append(path)
         pending_rows += nrows
         led.d["next_shard_index"] = idx + 1
-        led.save()
-        if cfg.mimi.push:
-            _upload_wave()
 
     writer = ShardWriter(P["shards"], MIMI_SCHEMA, int(cfg.data.shard_rows),
                          start_index=int(led.d.get("next_shard_index", 0)), on_flush=on_flush)
@@ -151,88 +150,149 @@ def encode(cfg) -> str:
         if p not in pending:
             pending.append(p); pending_rows += int(cfg.data.shard_rows)
 
+    decode_pool = ThreadPoolExecutor(max_workers=int(getattr(cfg.mimi, "decode_workers", 16)))
+    gpu_pool = ThreadPoolExecutor(max_workers=nd)
+
+    # ---- GPU encode (multi-GPU, OOM auto-split) ----
     @torch.inference_mode()
-    def _encode_batch(arrays, metas):
+    def _part(gi, arrays, metas):
         if not arrays:
-            return
-        maxlen = max(a.shape[0] for a in arrays)
-        iv = torch.zeros(len(arrays), 1, maxlen, dtype=torch.float32)
-        for i, a in enumerate(arrays):
-            iv[i, 0, : a.shape[0]] = torch.from_numpy(a)
-        iv = iv.to(device)
+            return []
+        model, dev = models[gi], devices[gi]
         try:
-            if device == "cuda":
-                with torch.autocast("cuda", dtype=dtype):
-                    codes = mimi.encode(iv, num_quantizers=n_cb).audio_codes
-            else:
-                codes = mimi.encode(iv, num_quantizers=n_cb).audio_codes
-        except RuntimeError as e:
-            if "out of memory" in str(e).lower() and len(arrays) > 1:
-                if device == "cuda":
-                    torch.cuda.empty_cache()
+            maxlen = max(a.shape[0] for a in arrays)
+            iv = torch.zeros(len(arrays), 1, maxlen, dtype=torch.float32)
+            for i, a in enumerate(arrays):
+                iv[i, 0, : a.shape[0]] = torch.from_numpy(a)
+            iv = iv.to(dev)
+            ac = torch.autocast("cuda", dtype=dtype) if use_cuda else _null()
+            with ac:
+                codes = model.encode(iv, num_quantizers=n_cb).audio_codes[:, :n_cb, :].to("cpu").numpy()
+        except Exception as e:
+            if use_cuda:
+                torch.cuda.empty_cache()
+            if _oom(e) and len(arrays) > 1:
                 m = len(arrays) // 2
-                _encode_batch(arrays[:m], metas[:m]); _encode_batch(arrays[m:], metas[m:])
-                return
+                return _part(gi, arrays[:m], metas[:m]) + _part(gi, arrays[m:], metas[m:])
+            if _oom(e):
+                return []
             raise
-        codes = codes.to("cpu").numpy()          # [B, n_cb, T]
+        rows = []
         for j, r in enumerate(metas):
             nf = min(codes.shape[2], _frames_of(r["duration"]))
             cb = codes[j, :n_cb, :nf].astype(np.int32)
-            writer.add({
-                "id": r["id"], "source": r["source"], "text": r["text"],
-                "duration": float(r["duration"]), "split": r["split"],
-                "num_frames": int(nf), "num_codebooks": int(n_cb),
-                "codes": [cb[c].tolist() for c in range(n_cb)],
-            })
+            rows.append({"id": r["id"], "source": r["source"], "text": r["text"],
+                         "duration": float(r["duration"]), "split": r["split"],
+                         "num_frames": int(nf), "num_codebooks": int(n_cb),
+                         "codes": [cb[c].tolist() for c in range(n_cb)]})
+        return rows
 
-    import pyarrow.parquet as pq
-    processed_h = float(led.d["encoded_hours"])
-    for bi, af in enumerate(todo):
-        tmp = tempfile.mkdtemp(dir=P["dl"])
+    def gpu_encode(arrays, metas):
+        step = math.ceil(len(arrays) / nd)
+        futs = [gpu_pool.submit(_part, min(k, nd - 1), arrays[i:i + step], metas[i:i + step])
+                for k, i in enumerate(range(0, len(arrays), step))]
+        with lock:
+            for f in futs:
+                for row in f.result():
+                    writer.add(row)
+
+    # ---- downloader thread ----
+    dlq: queue.Queue = queue.Queue(maxsize=int(getattr(cfg.mimi, "prefetch", 3)))
+
+    def downloader():
+        for af in todo:
+            d = tempfile.mkdtemp(dir=P["dl"])
+            try:
+                local = hf_hub_download(cfg.repos.data, af, repo_type="dataset", token=token, local_dir=d)
+                dlq.put((af, d, local))
+            except Exception as e:
+                shutil.rmtree(d, ignore_errors=True)
+                log.warning("download %s failed: %s", af, e)
+        dlq.put(_DONE)
+
+    # ---- decoder thread ----
+    batchq: queue.Queue = queue.Queue(maxsize=max(2, 2 * nd))
+
+    def _decode(rec):
         try:
-            local = hf_hub_download(cfg.repos.data, af, repo_type="dataset", token=token,
-                                    local_dir=tmp)
-            pf = pq.ParquetFile(local)
+            a, _ = decode_bytes(rec["audio_bytes"])
+            return (np.asarray(a, np.float32) if a is not None else None), rec
+        except Exception:
+            return None, rec
+
+    def decoder():
+        cols = ["id", "source", "text", "duration", "split", "audio_bytes"]
+        while True:
+            item = dlq.get()
+            if item is _DONE:
+                break
+            af, d, local = item
             clips = []
-            for b in pf.iter_batches(batch_size=64,
-                                     columns=["id", "source", "text", "duration",
-                                              "split", "sr", "audio_format", "audio_bytes"]):
-                for rec in b.to_pylist():
-                    try:
-                        arr, _sr = decode_bytes(rec["audio_bytes"])
-                        clips.append((arr, rec))
-                    except Exception as e:
-                        log.debug("decode fail %s: %s", rec.get("id"), e)
-            clips.sort(key=lambda c: len(c[0]))     # length-sort -> minimal padding
+            try:
+                pf = pq.ParquetFile(local)
+                for b in pf.iter_batches(batch_size=64, columns=cols):
+                    for arr, rec in decode_pool.map(_decode, b.to_pylist()):
+                        if arr is not None and rec.get("duration"):
+                            clips.append((arr, rec))
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+            clips.sort(key=lambda c: len(c[0]))        # length-sort -> minimal padding
             arrays, metas, frames = [], [], 0
-            for arr, rec in tqdm(clips, desc=f"encode {os.path.basename(af)} [{bi+1}/{len(todo)}]",
-                                 leave=False):
+            for arr, rec in clips:
                 nf = _frames_of(rec["duration"])
-                if arrays and frames + nf > budget:
-                    _encode_batch(arrays, metas)
-                    processed_h += sum(m["duration"] for m in metas) / 3600.0
-                    led.d["clips"] += len(metas)
-                    led.d["encoded_hours"] = round(processed_h, 4)
-                    arrays, metas, frames = [], [], 0
+                if arrays and frames + nf > budget_total:
+                    batchq.put(("batch", arrays, metas)); arrays, metas, frames = [], [], 0
                 arrays.append(arr); metas.append(rec); frames += nf
             if arrays:
-                _encode_batch(arrays, metas)
-                processed_h += sum(m["duration"] for m in metas) / 3600.0
-                led.d["clips"] += len(metas)
-                led.d["encoded_hours"] = round(processed_h, 4)
+                batchq.put(("batch", arrays, metas))
+            batchq.put(("file", af))
+        batchq.put(_DONE)
+
+    threading.Thread(target=downloader, daemon=True).start()
+    threading.Thread(target=decoder, daemon=True).start()
+
+    # ---- main GPU consumer ----
+    processed, base, total = 0, len(done), len(raw_bunches)
+    hours = float(led.d["encoded_hours"])
+    t0 = time.time()
+    while True:
+        item = batchq.get()
+        if item is _DONE:
+            break
+        if item[0] == "batch":
+            _, arrays, metas = item
+            gpu_encode(arrays, metas)
+            hours += sum(m["duration"] for m in metas) / 3600.0
+            led.d["clips"] += len(metas)
+            led.d["encoded_hours"] = round(hours, 4)
+        else:                                          # a raw bunch finished
+            af = item[1]
             led.d["raw_files_done"] = sorted(set(led.d["raw_files_done"]) | {af})
             led.save()
-            log.info("bunch %s done | encoded=%.1fh clips=%d", os.path.basename(af),
-                     led.d["encoded_hours"], led.d["clips"])
-            if device == "cuda":
+            if use_cuda:
                 torch.cuda.empty_cache()
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            _upload_wave()
+            processed += 1
+            el = max(1e-6, time.time() - t0)
+            rate = processed / (el / 3600)
+            eta = (len(todo) - processed) / rate if rate else 0
+            log.info("bunch %s done | %d/%d | %.1f h encoded | %.1f bunches/h | ETA %.1f h",
+                     os.path.basename(af), base + processed, total, led.d["encoded_hours"], rate, eta)
 
     writer.close()
-    if cfg.mimi.push:
-        _upload_wave(force=True)
+    _upload_wave(force=True)
+    for pl in (gpu_pool, decode_pool):
+        pl.shutdown(wait=True)
     led.push("encode: update mimi ledger")
-    log.info("encode DONE | encoded=%.1fh clips=%d hub_bunches=%d -> %s [mimi]",
+    log.info("encode DONE | %.1f h, %d clips, %d mimi bunches -> %s [mimi]",
              led.d["encoded_hours"], led.d["clips"], led.d["shards"]["hub_bunches"], cfg.repos.data)
     return cfg.repos.data
+
+
+def _oom(e):
+    return isinstance(e, RuntimeError) and "out of memory" in str(e).lower()
+
+
+class _null:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False

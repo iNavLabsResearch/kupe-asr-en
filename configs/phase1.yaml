@@ -33,9 +33,11 @@ base:
 mimi:
   model_id: kyutai/mimi
   num_codebooks: 8           # encode c0..c7 once; training selects how many to use
-  batch_max_frames: 8000     # sum-of-frames VRAM budget per encode batch (raise on big GPUs)
-  files_per_chunk: 4         # raw parquet files to encode before flushing a local mimi shard
-  prefetch: 12               # raw files kept downloaded ahead of the GPU
+  batch_max_frames: 8000     # sum-of-frames VRAM budget per encode batch PER GPU (raise on big cards)
+  prefetch: 3                # raw bunches kept downloaded ahead of the GPU (each ~2GB)
+  decode_workers: 16         # threads decoding FLAC bytes -> waveforms (CPU parallelism)
+  mimi_wave_rows: 50000      # mimi rows per uploaded bunch (~250MB); ~15 bunches for 750k rows
+  push: true
 
 # ------------------------------------------------------------------ data (English only)
 data:
