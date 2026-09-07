@@ -177,8 +177,9 @@ def build_app(engine: Engine):
     with gr.Blocks(title="Kupe-SLM-EN ASR") as demo:
         gr.Markdown("# 🗣️ Kupe-SLM-EN — English ASR (Lumma-0.6B + Mimi)\n"
                     f"Model: `{REPO}` · running on **{len(engine.devices)}× {engine.devices[0]}**")
-        with gr.Tab("📁 Upload a file"):
-            f_in = gr.Audio(sources=["upload"], type="filepath", label="Audio file")
+        with gr.Tab("📁 Upload or record a file"):
+            f_in = gr.Audio(sources=["upload", "microphone"], type="filepath",
+                            label="Upload an audio file  —  or click the mic to record")
             f_btn = gr.Button("Transcribe", variant="primary")
             f_out = gr.Textbox(label="Transcript", lines=4)
             f_stats = gr.Textbox(label="Stats (RTF / compute)", lines=1)
