@@ -56,10 +56,9 @@ def _paths(cfg):
 
 
 def _rows_per_bunch(cfg) -> int:
-    """Even row count per bunch so the final Hub file count ~= raw_target_shards."""
-    avg_dur = 10.0     # nominal seconds/clip for read+spontaneous English mix
-    est_rows = (float(cfg.data.target_hours) * 3600.0) / avg_dur
-    return max(int(cfg.data.shard_rows), int(-(-est_rows // int(cfg.data.raw_target_shards))))
+    """Rows per upload wave. Small = fast, frequent, crash-safe uploads (each bunch
+    logs when written); a killed run then loses at most one small in-flight bunch."""
+    return max(int(cfg.data.shard_rows), int(getattr(cfg.data, "wave_rows", 6000)))
 
 
 def _load(cfg):

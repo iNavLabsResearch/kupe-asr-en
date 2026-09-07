@@ -72,7 +72,10 @@ data:
   silence_val_cap: 60        # hold out up to this many silence clips to MEASURE silence->empty
 
   shard_rows: 1000           # rows per LOCAL parquet shard (RAM-safe)
-  raw_target_shards: 24      # compact local shards into ~this many `raw` bunches on Hub
+  wave_rows: 6000            # upload a bunch every ~this many rows (small = fast, crash-safe).
+                             # ~6k FLAC clips ≈ ~2 GB/bunch, writes in ~30s and uploads. Lower
+                             # if runs get interrupted a lot; the Hub file count grows but that's fine.
+  raw_target_shards: 24      # (legacy hint; wave_rows drives actual bunching now)
   mimi_target_shards: 24     # compact local mimi shards into ~this many `mimi` bunches on Hub
   bunch_soft_gb: 6.0         # warn (don't fail) if a bunch parquet exceeds this size
 
