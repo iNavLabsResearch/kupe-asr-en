@@ -1,432 +1,211 @@
 #!/usr/bin/env python
-"""Kaggle Gradio demo for anuj-inavlabs/kupe-asr-en (public weights, no HF token).
+"""Gradio demo for Kupe-SLM-EN ASR — runs on Kaggle (T4×2 or P100×1), no token needed.
 
-Two decode modes:
-  • Full file     — transcribe the whole upload in one (or windowed) pass
-  • Realtime      — feed the file in chunks as if it were live audio; the
-                    transcript grows hop by hop (PARTIAL / PRE_HIT_LLM / EOS)
+Two modes:
+  • Upload a file            -> transcribe the whole clip (long files auto-windowed,
+                                windows fanned out across GPUs), reports Real-Time Factor.
+  • Live mic (streaming)     -> browser mic streams to the server over Gradio's websocket;
+                                we keep a rolling context buffer and re-decode it as speech
+                                arrives, showing the transcript grow live + per-update
+                                latency and RTF.
 
-Multi-GPU (Kaggle T4×2): pipeline-parallel
-  cuda:0  Mimi encoder
-  cuda:1  Kupe-LM (LummaASR)
-Single GPU (P100×1 / T4×1): both on cuda:0
-CPU fallback if no CUDA.
+Audio is always normalised to 24 kHz mono float32 (Mimi's rate) regardless of the
+browser/file sample rate, so capture is correct on any device.
 
-Realtime factor (RTF) = wall_clock / audio_duration   ( <1 means faster than live )
-
-================================================================================
-Kaggle (GPU T4×2 or P100×1, Internet ON)
-================================================================================
-
+Run on Kaggle (Internet ON, GPU T4×2 or P100):
     !git clone https://github.com/iNavLabsResearch/kupe-asr-en.git
     %cd kupe-asr-en
-
-    # Do NOT reinstall torch — Kaggle GPU images already ship CUDA torch.
-    !pip install -q "transformers==5.4.0" "tokenizers>=0.22" accelerate \
-        huggingface_hub librosa soundfile soxr pyyaml numpy gradio
-
-    !python scripts/10_gradio_kaggle.py --share
-
-Open the printed https://*.gradio.live URL. Upload audio → Transcribe.
-No HF_TOKEN / WANDB / env secrets required (the model repo is public).
+    !pip -q install "transformers==5.4.0" "huggingface_hub>=0.34" gradio librosa soundfile soxr
+    !python scripts/10_gradio_kaggle.py           # prints a public *.gradio.live URL
 """
-from __future__ import annotations
-
 import _bootstrap  # noqa: F401
-
-import argparse
 import os
-import threading
 import time
-from dataclasses import dataclass, field
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
 
-from kupe_asr_en.constants import MIMI_FRAME_RATE, MIMI_SAMPLE_RATE
+from kupe_asr_en.config import load_config
+from kupe_asr_en.constants import MIMI_SAMPLE_RATE, MIMI_FRAME_RATE
 from kupe_asr_en.env import log
 from kupe_asr_en.modeling.asr_model import LummaASR
 
-MODEL_ID = "anuj-inavlabs/kupe-asr-en"
-MIMI_ID = "kyutai/mimi"
-
-# Public Hub downloads — never require a token.
-os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
-os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-
-# --------------------------------------------------------------------------- GPU
-def _cuda_count() -> int:
-    return int(torch.cuda.is_available() and torch.cuda.device_count() or 0)
-
-
-def _gpu_names() -> list[str]:
-    return [torch.cuda.get_device_name(i) for i in range(_cuda_count())]
+REPO = "anuj-inavlabs/kupe-asr-en"
+MAX_FRAMES = 750                      # model's max audio frames (=60s @12.5Hz); keep windows under this
+WINDOW_S = 28.0                      # file mode: window length for long clips
+CONTEXT_S = 24.0                    # live mode: rolling context kept for each decode
+MIN_INFER_S = 1.0                   # live mode: only re-decode after this much NEW audio
 
 
-def _pick_dtype(device: str) -> str:
-    """T4 (7.5) and P100 (6.0) have no bf16 — use fp16. Ampere+ can use bf16."""
-    if not device.startswith("cuda") or not torch.cuda.is_available():
-        return "float32"
-    major, _ = torch.cuda.get_device_capability(0)
-    return "bfloat16" if major >= 8 else "float16"
-
-
-def _pick_devices():
-    n = _cuda_count()
-    if n >= 2:
-        return "cuda:0", "cuda:1", "pipeline-2gpu"
-    if n == 1:
-        return "cuda:0", "cuda:0", "single-gpu"
-    return "cpu", "cpu", "cpu"
-
-
-def _gpu_mem_line() -> str:
-    if not torch.cuda.is_available():
-        return "CPU only"
-    parts = []
-    for i in range(torch.cuda.device_count()):
-        alloc = torch.cuda.memory_allocated(i) / (1024 ** 3)
-        total = torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
-        parts.append(f"cuda:{i} {torch.cuda.get_device_name(i)}  {alloc:.2f}/{total:.1f} GB")
-    return " · ".join(parts)
-
-
-# --------------------------------------------------------------------------- audio
-def load_audio(src, sr: int = MIMI_SAMPLE_RATE) -> np.ndarray:
-    """Gradio may hand a filepath, a (sr, ndarray) tuple, or a dict."""
-    if src is None:
-        raise ValueError("No audio uploaded.")
-    if isinstance(src, (tuple, list)) and len(src) == 2 and not isinstance(src[0], str):
-        in_sr, arr = src
-        arr = np.asarray(arr, dtype=np.float32)
-        if arr.ndim > 1:
-            arr = arr.mean(axis=1)
-        if arr.max() > 1.5:                       # int16-style
-            arr = arr / 32768.0
-        if int(in_sr) != sr:
-            import librosa
-            arr = librosa.resample(arr, orig_sr=int(in_sr), target_sr=sr)
-        return np.ascontiguousarray(arr, dtype=np.float32)
-    if isinstance(src, dict):
-        src = src.get("path") or src.get("name")
-    path = str(src)
-    try:
-        import soundfile as sf
-        arr, in_sr = sf.read(path, dtype="float32", always_2d=False)
-        if arr.ndim > 1:
-            arr = arr.mean(axis=1)
-        if int(in_sr) != sr:
-            import librosa
-            arr = librosa.resample(np.asarray(arr, dtype=np.float32),
-                                   orig_sr=int(in_sr), target_sr=sr)
-        return np.ascontiguousarray(arr, dtype=np.float32)
-    except Exception:
+# ----------------------------------------------------------------- audio utils
+def to_24k_mono(sr, data) -> np.ndarray:
+    """Any (sr, ndarray int16/float) -> float32 mono @ 24 kHz in [-1,1]."""
+    x = np.asarray(data)
+    if x.dtype == np.int16:
+        x = x.astype(np.float32) / 32768.0
+    elif x.dtype == np.int32:
+        x = x.astype(np.float32) / 2147483648.0
+    else:
+        x = x.astype(np.float32)
+    if x.ndim > 1:                                  # stereo -> mono
+        x = x.mean(axis=1)
+    peak = float(np.max(np.abs(x))) if x.size else 0.0
+    if peak > 1.0:                                  # guard odd scaling
+        x = x / peak
+    if sr and sr != MIMI_SAMPLE_RATE:
         import librosa
-        arr, _ = librosa.load(path, sr=sr, mono=True)
-        return np.ascontiguousarray(arr, dtype=np.float32)
+        x = librosa.resample(x, orig_sr=sr, target_sr=MIMI_SAMPLE_RATE)
+    return np.ascontiguousarray(x, dtype=np.float32)
 
 
-def _download_model(model_id: str, model_dir: str | None) -> str:
-    if model_dir:
-        return model_dir
-    from huggingface_hub import snapshot_download
-    log.info("downloading %s (public, no token) …", model_id)
-    return snapshot_download(model_id, repo_type="model")
+def load_file_24k(path) -> np.ndarray:
+    import librosa
+    x, _ = librosa.load(path, sr=MIMI_SAMPLE_RATE, mono=True)
+    return np.ascontiguousarray(x, dtype=np.float32)
 
 
-# --------------------------------------------------------------------------- engine
-@dataclass
-class Metrics:
-    mode: str
-    audio_s: float
-    wall_s: float
-    hops: int = 1
-    last_hop_s: float = 0.0
-    chunk_ms: int = 0
-    windows: int = 1
-    flags: list[str] = field(default_factory=list)
-
-    @property
-    def rtf(self) -> float:
-        return self.wall_s / max(self.audio_s, 1e-6)
-
-    @property
-    def x_realtime(self) -> float:
-        return self.audio_s / max(self.wall_s, 1e-6)
-
-    def markdown(self, engine: "KaggleASR") -> str:
-        rtf = self.rtf
-        verdict = "faster than realtime" if rtf < 1 else "slower than realtime"
-        hop = (f"| Mean hop | {self.wall_s / max(self.hops, 1):.3f} s |\n"
-               f"| Last hop | {self.last_hop_s:.3f} s |\n"
-               f"| Chunk | {self.chunk_ms} ms × {self.hops} hops |\n") if self.mode == "realtime" else ""
-        flags = (" · ".join(self.flags) + "\n\n") if self.flags else ""
-        return (
-            f"{flags}"
-            f"| | |\n|---|---|\n"
-            f"| Mode | **{self.mode}** |\n"
-            f"| Audio | **{self.audio_s:.2f} s** |\n"
-            f"| Wall clock | **{self.wall_s:.2f} s** |\n"
-            f"| **RTF** | **{rtf:.3f}** ({verdict}) |\n"
-            f"| Throughput | **{self.x_realtime:.2f}× realtime** |\n"
-            f"{hop}"
-            f"| Windows | {self.windows} |\n"
-            f"| GPUs | {engine.n_gpu}× ({', '.join(engine.gpu_names) or 'CPU'}) |\n"
-            f"| Placement | Mimi → `{engine.mimi_device}` · Kupe-LM → `{engine.lm_device}` |\n"
-            f"| Parallelism | `{engine.parallel}` · dtype `{engine.dtype}` |\n"
-            f"| VRAM | {_gpu_mem_line()} |\n"
-        )
-
-
-class KaggleASR:
-    """Pipeline-parallel ASR: Mimi on GPU0, Kupe-LM on GPU1 when 2 devices exist."""
-
-    def __init__(self, model_id: str = MODEL_ID, model_dir: str | None = None,
-                 codebooks: int = 8, max_new_tokens: int = 256,
-                 max_context_s: float = 30.0, repetition_penalty: float = 1.3,
-                 no_repeat_ngram_size: int = 3, pre_llm_threshold: float = 0.30,
-                 eos_threshold: float = 0.85):
-        self.mimi_device, self.lm_device, self.parallel = _pick_devices()
-        self.dtype = _pick_dtype(self.lm_device)
-        self.n_gpu = _cuda_count()
-        self.gpu_names = _gpu_names()
+# ----------------------------------------------------------------- engine (multi-GPU pool)
+class Engine:
+    def __init__(self, model_dir, codebooks, max_new_tokens, rep_pen, no_ngram):
+        from transformers import MimiModel
+        if torch.cuda.is_available():
+            self.devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        else:
+            self.devices = ["cpu"]
         self.codebooks = int(codebooks)
         self.max_new_tokens = int(max_new_tokens)
-        self.max_context_s = float(max_context_s)
-        self.repetition_penalty = float(repetition_penalty)
-        self.no_repeat_ngram_size = int(no_repeat_ngram_size)
-        self.pre_llm_threshold = float(pre_llm_threshold)
-        self.eos_threshold = float(eos_threshold)
-        self.lock = threading.Lock()
-
-        if torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-
-        local = _download_model(model_id, model_dir)
-        log.info("loading Kupe-LM on %s (%s) …", self.lm_device, self.dtype)
-        self.model, self.tok = LummaASR.load(local, device=self.lm_device, dtype=self.dtype)
-        self.model.eval()
-
-        from transformers import MimiModel
-        log.info("loading Mimi on %s …", self.mimi_device)
-        self.mimi = MimiModel.from_pretrained(MIMI_ID).to(self.mimi_device).eval()
-        log.info("ready | %s | %s", self.parallel, _gpu_mem_line())
-
-    def banner(self) -> str:
-        gpus = ", ".join(self.gpu_names) or "CPU"
-        return (
-            f"**Kupe-SLM-EN 600M** · `{MODEL_ID}`  \n"
-            f"GPUs: **{self.n_gpu}×** {gpus} · parallelism `{self.parallel}`  \n"
-            f"Mimi `{self.mimi_device}` → Kupe-LM `{self.lm_device}` · `{self.dtype}`"
-        )
+        self.rep_pen = float(rep_pen)
+        self.no_ngram = int(no_ngram)
+        self.models, self.mimis, self.toks = [], [], []
+        for d in self.devices:
+            dt = "float16" if d.startswith("cuda") else "float32"
+            m, tok = LummaASR.load(model_dir, device=d, dtype=dt)
+            self.models.append(m); self.toks.append(tok)
+            self.mimis.append(MimiModel.from_pretrained("kyutai/mimi").to(d).eval())
+        self._locks = [threading.Lock() for _ in self.devices]
+        self._pool = ThreadPoolExecutor(max_workers=len(self.devices))
+        log.info("Engine ready on %s", self.devices)
 
     @torch.inference_mode()
-    def encode(self, audio: np.ndarray) -> torch.Tensor:
-        """Mimi on mimi_device → codes [K, T] on CPU (tiny)."""
-        buf = np.ascontiguousarray(audio, dtype=np.float32)
-        if buf.size == 0:
-            return torch.zeros(self.codebooks, 0, dtype=torch.long)
-        cap = int(self.model.max_audio_frames * MIMI_SAMPLE_RATE / MIMI_FRAME_RATE)
-        if buf.size > cap:
-            buf = buf[-cap:]
-        wav = torch.from_numpy(buf).view(1, 1, -1).to(self.mimi_device)
-        codes = self.mimi.encode(wav, num_quantizers=self.codebooks).audio_codes
-        return codes[0].to("cpu")                                          # [K, T]
-
-    @torch.inference_mode()
-    def decode(self, codes: torch.Tensor, with_scores: bool = False):
-        """Kupe-LM generate on lm_device. Returns (text, flags)."""
-        if codes.numel() == 0 or codes.shape[-1] == 0:
-            return "", []
-        t = min(int(codes.shape[-1]), int(self.model.max_audio_frames))
-        codes = codes[:, :t]
-        nf = torch.tensor([t], dtype=torch.long)
-        prefix = self.model.build_prefix(codes[None], nf)[0]
-        inp = prefix[None].to(self.lm_device)
-        attn = torch.ones(1, prefix.shape[0], dtype=torch.long, device=self.lm_device)
-        kw = dict(
-            inputs_embeds=inp, attention_mask=attn,
-            max_new_tokens=self.max_new_tokens, do_sample=False, num_beams=1,
-            eos_token_id=self.model.eos_id, pad_token_id=self.tok.pad_token_id,
-            repetition_penalty=self.repetition_penalty,
-            no_repeat_ngram_size=self.no_repeat_ngram_size,
-        )
-        flags: list[str] = []
-        if with_scores:
-            gen = self.model.lumma.generate(
-                **kw, output_scores=True, return_dict_in_generate=True)
-            ids = gen.sequences[0].tolist()
-            for i, logits in enumerate(gen.scores):
-                p_eos = torch.softmax(logits[0].float(), dim=-1)[self.model.eos_id].item()
-                if p_eos >= self.pre_llm_threshold and "PRE_HIT_LLM" not in flags:
-                    flags.append("PRE_HIT_LLM")
-                if p_eos >= self.eos_threshold or (i < len(ids) and ids[i] == self.model.eos_id):
-                    flags.append("END_OF_SPEECH")
-                    break
-        else:
-            gen = self.model.lumma.generate(**kw)
+    def _decode(self, gi: int, audio24k: np.ndarray) -> str:
+        """Transcribe one <=60s window on GPU `gi`."""
+        if audio24k.size == 0:
+            return ""
+        with self._locks[gi]:
+            dev = self.devices[gi]
+            m, mimi, tok = self.models[gi], self.mimis[gi], self.toks[gi]
+            iv = torch.from_numpy(audio24k).view(1, 1, -1).to(dev)
+            codes = mimi.encode(iv, num_quantizers=self.codebooks).audio_codes[0]  # [K,T]
+            codes = codes[:, :MAX_FRAMES].to("cpu")
+            nf = torch.tensor([codes.shape[1]], dtype=torch.long)
+            prefix = m.build_prefix(codes[None], nf)[0]
+            gen = m.lumma.generate(
+                inputs_embeds=prefix[None].to(dev),
+                attention_mask=torch.ones(1, prefix.shape[0], dtype=torch.long, device=dev),
+                max_new_tokens=self.max_new_tokens, do_sample=False, num_beams=1,
+                eos_token_id=m.eos_id, pad_token_id=tok.pad_token_id,
+                repetition_penalty=self.rep_pen, no_repeat_ngram_size=self.no_ngram)
             ids = gen[0].tolist()
-        if self.model.eos_id in ids:
-            ids = ids[: ids.index(self.model.eos_id)]
-        text = self.tok.decode(ids, skip_special_tokens=True).strip()
-        return text, flags
+            if m.eos_id in ids:
+                ids = ids[: ids.index(m.eos_id)]
+            return tok.decode(ids, skip_special_tokens=True).strip()
 
-    def transcribe_full(self, audio: np.ndarray) -> tuple[str, Metrics]:
-        """Whole-file decode. Long clips are windowed at max_context_s."""
-        audio_s = len(audio) / MIMI_SAMPLE_RATE
-        win = int(self.max_context_s * MIMI_SAMPLE_RATE)
-        hop = win  # non-overlap; each window is a complete utterance-sized chunk
-        starts = list(range(0, len(audio), hop)) or [0]
-        t0 = time.perf_counter()
-        parts: list[str] = []
-        # 2-GPU pipeline: encode window i+1 on GPU0 while decoding window i on GPU1
-        next_codes = self.encode(audio[starts[0]: starts[0] + win])
-        for i, start in enumerate(starts):
-            codes = next_codes
-            if i + 1 < len(starts):
-                nxt = audio[starts[i + 1]: starts[i + 1] + win]
-            else:
-                nxt = None
-            if nxt is not None and self.mimi_device != self.lm_device:
-                # overlap: encode next on GPU0, decode current on GPU1
-                text, _ = self.decode(codes)
-                next_codes = self.encode(nxt)
-            else:
-                if nxt is not None:
-                    next_codes = self.encode(nxt)
-                text, _ = self.decode(codes)
-            if text:
-                parts.append(text)
-        wall = time.perf_counter() - t0
-        return " ".join(parts).strip(), Metrics(
-            mode="full", audio_s=audio_s, wall_s=wall, windows=len(starts))
+    def transcribe_full(self, audio24k: np.ndarray):
+        """Whole-file transcription. Long clips are windowed and fanned across GPUs."""
+        dur = len(audio24k) / MIMI_SAMPLE_RATE
+        win = int(WINDOW_S * MIMI_SAMPLE_RATE)
+        windows = [audio24k[i:i + win] for i in range(0, len(audio24k), win)] or [audio24k]
+        t0 = time.time()
+        # round-robin windows across GPUs, decode in parallel
+        futs = [self._pool.submit(self._decode, i % len(self.devices), w)
+                for i, w in enumerate(windows)]
+        parts = [f.result() for f in futs]
+        compute = time.time() - t0
+        text = " ".join(p for p in parts if p).strip()
+        rtf = compute / max(1e-6, dur)
+        return text, dur, compute, rtf
 
-    def transcribe_realtime(self, audio: np.ndarray, chunk_ms: int):
-        """Yield (text, metrics) after every chunk — growing transcript."""
-        audio_s = len(audio) / MIMI_SAMPLE_RATE
-        hop = max(int(MIMI_SAMPLE_RATE * chunk_ms / 1000.0), 1)
-        mx = int(self.max_context_s * MIMI_SAMPLE_RATE)
-        buf = np.zeros(0, dtype=np.float32)
-        t0 = time.perf_counter()
-        hops = 0
-        last_hop = 0.0
-        text = ""
-        flags: list[str] = []
-        for start in range(0, len(audio), hop):
-            hops += 1
-            t_hop = time.perf_counter()
-            buf = np.concatenate([buf, audio[start: start + hop]])
-            if buf.size > mx:
-                buf = buf[-mx:]
-            codes = self.encode(buf)
-            text, flags = self.decode(codes, with_scores=True)
-            last_hop = time.perf_counter() - t_hop
-            wall = time.perf_counter() - t0
-            heard = min(start + hop, len(audio)) / MIMI_SAMPLE_RATE
-            yield text, Metrics(
-                mode="realtime", audio_s=heard, wall_s=wall, hops=hops,
-                last_hop_s=last_hop, chunk_ms=chunk_ms, windows=1, flags=flags)
-        wall = time.perf_counter() - t0
-        yield text, Metrics(
-            mode="realtime", audio_s=audio_s, wall_s=wall, hops=hops,
-            last_hop_s=last_hop, chunk_ms=chunk_ms, windows=1, flags=flags)
+    def transcribe_live(self, audio24k: np.ndarray):
+        """Decode the current rolling context on GPU 0; return text + timing."""
+        ctx = audio24k[-int(CONTEXT_S * MIMI_SAMPLE_RATE):]
+        t0 = time.time()
+        text = self._decode(0, ctx)
+        compute = time.time() - t0
+        rtf = compute / max(1e-6, len(ctx) / MIMI_SAMPLE_RATE)
+        return text, compute, rtf
 
 
-ENGINE: KaggleASR | None = None
-
-
-def get_engine(model_id: str, model_dir: str | None) -> KaggleASR:
-    global ENGINE
-    if ENGINE is None:
-        ENGINE = KaggleASR(model_id=model_id, model_dir=model_dir)
-    return ENGINE
-
-
-# --------------------------------------------------------------------------- Gradio
-def _run(audio, mode: str, chunk_ms: int, model_id: str, model_dir: str | None):
-    if audio is None:
-        yield "Upload an audio file first.", "Waiting for audio."
-        return
-    eng = get_engine(model_id, model_dir)
-    wav = load_audio(audio)
-    if wav.size < int(0.1 * MIMI_SAMPLE_RATE):
-        yield "", "Audio too short (<0.1 s)."
-        return
-    with eng.lock:
-        if mode == "Realtime chunks":
-            for text, met in eng.transcribe_realtime(wav, int(chunk_ms)):
-                yield text, met.markdown(eng)
-        else:
-            text, met = eng.transcribe_full(wav)
-            yield text, met.markdown(eng)
-
-
-def build_app(model_id: str, model_dir: str | None):
+# ----------------------------------------------------------------- gradio app
+def build_app(engine: Engine):
     import gradio as gr
 
-    eng = get_engine(model_id, model_dir)
+    def do_file(path):
+        if not path:
+            return "Upload an audio file first.", ""
+        audio = load_file_24k(path)
+        text, dur, compute, rtf = engine.transcribe_full(audio)
+        stats = (f"audio {dur:.1f}s · compute {compute:.1f}s · "
+                 f"RTF {rtf:.2f}× ({1/rtf:.1f}× realtime) · GPUs {len(engine.devices)}")
+        return text or "(no speech detected)", stats
 
-    with gr.Blocks(title="Kupe-SLM-EN ASR", theme=gr.themes.Soft()) as demo:
-        gr.Markdown("# Kupe-SLM-EN — English ASR")
-        gr.Markdown(eng.banner())
-        gr.Markdown(
-            "Upload a wav/mp3/flac (or record). **Full file** transcribes the clip in "
-            "one shot. **Realtime chunks** feeds the same clip hop-by-hop so you see "
-            "the transcript grow — the way a voice agent would hear it. "
-            "RTF is measured on the live GPU(s)."
-        )
-        with gr.Row():
-            with gr.Column(scale=1):
-                audio = gr.Audio(
-                    label="Audio (upload or record)",
-                    sources=["upload", "microphone"],
-                    type="filepath",
-                )
-                mode = gr.Radio(
-                    ["Full file", "Realtime chunks"],
-                    value="Full file",
-                    label="Decode mode",
-                )
-                chunk = gr.Slider(
-                    160, 2000, value=480, step=80,
-                    label="Realtime chunk size (ms)",
-                )
-                btn = gr.Button("Transcribe", variant="primary")
-            with gr.Column(scale=1):
-                text = gr.Textbox(label="Transcript", lines=10)
-                metrics = gr.Markdown(label="Realtime factor")
-        def _click(a, m, c):
-            yield from _run(a, m, c, model_id, model_dir)
+    def live_reset():
+        return {"buf": np.zeros(0, np.float32), "since": 0.0, "text": ""}, "", ""
 
-        btn.click(fn=_click, inputs=[audio, mode, chunk], outputs=[text, metrics])
+    def do_live(stream_chunk, state):
+        if state is None:
+            state = {"buf": np.zeros(0, np.float32), "since": 0.0, "text": ""}
+        if stream_chunk is None:
+            return state, state.get("text", ""), ""
+        sr, data = stream_chunk
+        chunk = to_24k_mono(sr, data)
+        state["buf"] = np.concatenate([state["buf"], chunk])
+        state["since"] += len(chunk) / MIMI_SAMPLE_RATE
+        # only re-decode once enough new audio arrived (keeps it responsive, not thrashing)
+        if state["since"] < MIN_INFER_S:
+            return state, state.get("text", ""), ""
+        state["since"] = 0.0
+        text, compute, rtf = engine.transcribe_live(state["buf"])
+        state["text"] = text
+        stats = f"latency {compute*1000:.0f} ms · RTF {rtf:.2f}× · heard {len(state['buf'])/MIMI_SAMPLE_RATE:.1f}s"
+        return state, text, stats
+
+    with gr.Blocks(title="Kupe-SLM-EN ASR") as demo:
+        gr.Markdown("# 🗣️ Kupe-SLM-EN — English ASR (Lumma-0.6B + Mimi)\n"
+                    f"Model: `{REPO}` · running on **{len(engine.devices)}× {engine.devices[0]}**")
+        with gr.Tab("📁 Upload a file"):
+            f_in = gr.Audio(sources=["upload"], type="filepath", label="Audio file")
+            f_btn = gr.Button("Transcribe", variant="primary")
+            f_out = gr.Textbox(label="Transcript", lines=4)
+            f_stats = gr.Textbox(label="Stats (RTF / compute)", lines=1)
+            f_btn.click(do_file, inputs=f_in, outputs=[f_out, f_stats])
+        with gr.Tab("🎤 Live mic (realtime)"):
+            gr.Markdown("Click record and speak — transcript updates as you talk.")
+            st = gr.State(None)
+            m_in = gr.Audio(sources=["microphone"], streaming=True, label="Microphone")
+            m_out = gr.Textbox(label="Live transcript", lines=4)
+            m_stats = gr.Textbox(label="Latency / RTF", lines=1)
+            m_in.stream(do_live, inputs=[m_in, st], outputs=[st, m_out, m_stats],
+                        time_limit=None, stream_every=0.5)
+            m_in.start_recording(live_reset, outputs=[st, m_out, m_stats])
     return demo
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Kaggle Gradio demo for kupe-asr-en")
-    ap.add_argument("--model-id", default=MODEL_ID)
-    ap.add_argument("--model-dir", default=None, help="local snapshot; else Hub download")
-    ap.add_argument("--share", action="store_true", default=True,
-                    help="Gradio public URL (needed on Kaggle)")
-    ap.add_argument("--no-share", action="store_true")
-    ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=7860)
-    args = ap.parse_args()
-
-    log.info("GPUs detected: %d %s", _cuda_count(), _gpu_names())
-    share = False if args.no_share else args.share
-    demo = build_app(args.model_id, args.model_dir)
-    log.info("launching Gradio share=%s — watch for the *.gradio.live URL", share)
-    kw = dict(share=share, server_name=args.host, server_port=args.port,
-              show_error=True, inline=False)
-    app = demo.queue(max_size=8)
-    try:
-        app.launch(**kw, ssr_mode=False)
-    except TypeError:
-        app.launch(**kw)
+    from huggingface_hub import snapshot_download
+    cfg = load_config()
+    log.info("downloading %s …", REPO)
+    model_dir = snapshot_download(REPO, repo_type="model")   # public: no token needed
+    engine = Engine(model_dir, codebooks=cfg.audio.codebooks,
+                    max_new_tokens=cfg.eval.max_new_tokens,
+                    rep_pen=cfg.stream.repetition_penalty,
+                    no_ngram=cfg.stream.no_repeat_ngram_size)
+    demo = build_app(engine)
+    demo.queue().launch(share=True, server_name="0.0.0.0", server_port=7860)
 
 
 if __name__ == "__main__":
