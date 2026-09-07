@@ -174,8 +174,8 @@ class LummaASR(nn.Module):
     # ------------------------------------------------------------------ save / load
     def save(self, out_dir: str, cfg, tokenizer):
         os.makedirs(out_dir, exist_ok=True)
-        self.lumma.save_pretrained(os.path.join(out_dir, "lumma"))
-        tokenizer.save_pretrained(os.path.join(out_dir, "lumma"))
+        self.lumma.save_pretrained(os.path.join(out_dir, "kupe-lm"))   # branded backbone dir
+        tokenizer.save_pretrained(os.path.join(out_dir, "kupe-lm"))
         torch.save(self.frontend.state_dict(), os.path.join(out_dir, "frontend.pt"))
         meta = {
             "frontend": cfg.audio.to_dict() if hasattr(cfg.audio, "to_dict") else dict(cfg.audio),
@@ -194,13 +194,15 @@ class LummaASR(nn.Module):
         _check_transformers()
         meta = json.load(open(os.path.join(model_dir, "asr_config.json")))
         td = _DTYPES[dtype or meta.get("dtype", "float32")]
+        # branded dir is "kupe-lm"; fall back to legacy "lumma" for older runs
+        base_sub = "kupe-lm" if os.path.isdir(os.path.join(model_dir, "kupe-lm")) else "lumma"
         lumma = AutoModelForCausalLM.from_pretrained(
-            os.path.join(model_dir, "lumma"), trust_remote_code=True, dtype=td).to(device).eval()
+            os.path.join(model_dir, base_sub), trust_remote_code=True, dtype=td).to(device).eval()
         fe = AudioFrontend(meta["embed_dim"], int(meta["frontend"]["codebooks"]),
                            meta["frontend"]["frontend"], meta["frontend"]["projector"],
                            float(meta["frontend"].get("proj_dropout", 0.0)))
         fe.load_state_dict(torch.load(os.path.join(model_dir, "frontend.pt"), map_location="cpu"))
         fe = fe.to(device).to(td).eval()
-        tok = load_tokenizer(os.path.join(model_dir, "lumma"))
+        tok = load_tokenizer(os.path.join(model_dir, base_sub))
         m = cls(lumma, fe, meta["bos_id"], meta["eos_id"], meta["max_audio_frames"]).to(device)
         return m, tok
