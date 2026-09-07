@@ -37,12 +37,18 @@ class LummaTrainer:
             def _save(self, output_dir=None, state_dict=None):
                 if state_dict is None:
                     state_dict = self.model.state_dict()
-                lm, emb = "lumma.lm_head.weight", "lumma.model.embed_tokens.weight"
-                if lm in state_dict and emb in state_dict and \
-                        state_dict[lm].data_ptr() == state_dict[emb].data_ptr():
-                    state_dict = dict(state_dict)
-                    state_dict[lm] = state_dict[lm].clone()   # unshare for safetensors
-                return super()._save(output_dir, state_dict=state_dict)
+                # generic untie: clone any tensor that shares storage with an earlier
+                # one (safetensors rejects shared storage). Works for ANY tied base model.
+                seen, sd, cloned = {}, dict(state_dict), False
+                for k, v in list(sd.items()):
+                    if not hasattr(v, "data_ptr"):
+                        continue
+                    ptr = v.data_ptr()
+                    if ptr in seen:
+                        sd[k] = v.clone(); cloned = True
+                    else:
+                        seen[ptr] = k
+                return super()._save(output_dir, state_dict=sd if cloned else state_dict)
         return _T
 
 

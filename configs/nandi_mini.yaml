@@ -1,0 +1,177 @@
+# =========================================================================
+# kupe-asr-en — PHASE 1 (English-only sanity run on Lumma-0.6B-Base + Mimi)
+# Single source of truth for every stage. `{owner}` is filled from HF_OWNER.
+#
+# Phase 1 goal: prove the pipeline end-to-end and prove Lumma actually learns
+# English ASR from Mimi tokens. NOT production quality.
+# =========================================================================
+project: kupe-asr-en-mini-150m
+owner: anuj-inavlabs          # overridden by env HF_OWNER / HF_USERNAME
+seed: 1337
+
+repos:
+  data: "{owner}/kupe-asr-en-data"        # SAME encoded data (reused)     # dataset repo: `raw` (flac) + `mimi` (codes) configs
+  runs: "{owner}/kupe-asr-en-mini-150m-runs"     # every training run: weights + eval + ledgers
+  model: "{owner}/kupe-asr-en-mini-150m"         # latest/best model weights
+
+paths:
+  root:          "./artifacts"
+  raw_dir:       "./artifacts/data/raw"      # local mirror of the `raw` config
+  mimi_dir:      "./artifacts/data/mimi"     # local mirror of the `mimi` config
+  runs_dir:      "./artifacts/runs"
+  ledger_dir:    "./artifacts/ledger"        # data.json / mimi.json (mirrored to Hub)
+
+# ------------------------------------------------------------------ base models
+base:
+  lumma_id: FrontiersMind/Nandi-Mini-150M
+  # Lumma ships custom modeling code that REQUIRES transformers==5.4.0.
+  # trust_remote_code is mandatory (LummaForCausalLM / LummaTokenizer live in the repo).
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_impl: sdpa            # or flash_attention_2 if installed on the GPU box
+
+mimi:
+  model_id: kyutai/mimi
+  num_codebooks: 8           # encode c0..c7 once; training selects how many to use
+  batch_max_frames: 8000     # sum-of-frames VRAM budget per encode batch PER GPU (raise on big cards)
+  prefetch: 1                # raw bunches kept downloaded ahead of the GPU. 80GB-disk safe:
+                             # some raw bunches are ~16GB, so ~3 in flight ≈ 48GB worst case.
+                             # Each bunch is DELETED right after decode, and mimi output is
+                             # uploaded+deleted per wave, so disk stays bounded. Raise to 2-3
+                             # only on a bigger disk for more GPU/download overlap.
+  decode_workers: 16         # threads decoding FLAC bytes -> waveforms (CPU parallelism)
+  mimi_wave_rows: 50000      # mimi rows per uploaded bunch (~250MB)
+  decode_chunk: 3000         # clips decoded into RAM before a GPU batch (bounds RAM; GPU starts fast)
+  push: true
+
+# ------------------------------------------------------------------ data (English only)
+data:
+  languages: [en]            # PHASE 1 IS ENGLISH ONLY. Do not add languages here.
+  target_sr: 24000           # Mimi's native rate; never change for Mimi.
+  audio_format: flac         # raw storage codec: flac (lossless, default) | opus (10x smaller)
+  opus_bitrate: 24000        # only used when audio_format=opus
+
+  # Total English hours to collect. The pipeline REFUSES to start training
+  # below `min_hours` (rule: never train on a dataset that missed target).
+  target_hours: 3000
+  min_hours: 2500
+
+  # Per-source hour caps. Streaming stops at the cap, so we download only what
+  # we keep. Sum of caps should comfortably exceed target_hours (headroom for
+  # clips dropped by the length/validity filters). Set a cap to 0 to disable it.
+  source_caps:
+    librispeech: 960         # openslr/librispeech_asr (ungated) — clean read core
+    peoples_speech: 2100     # MLCommons/peoples_speech (ungated, CC-BY) — diversity
+    svarah: 12               # ai4bharat/Svarah (gated=auto) — Indian-accented English
+    gigaspeech: 0            # speechcolab/gigaspeech (gated) — off by default; set >0 to enable
+
+  min_dur: 1.0               # drop clips shorter than this (seconds)
+  max_dur: 20.0              # drop clips longer than this (seconds)
+  val_hours: 5.0             # held-out validation carved from the stream
+  test_hours: 5.0            # held-out test carved from the stream
+
+  # ANTI-HALLUCINATION: inject silence/ambient clips labeled "" so the model learns
+  # silence -> emit nothing (not "the the the" / "thank you"). These are encoded to
+  # Mimi like any clip; the empty target teaches an immediate <eos>.
+  silence_frac: 0.05         # add this fraction of the real clip count as silence clips
+  silence_min_dur: 2.0       # silence clip duration range (seconds)
+  silence_max_dur: 5.0
+  silence_val_cap: 60        # hold out up to this many silence clips to MEASURE silence->empty
+
+  shard_rows: 1000           # rows per LOCAL parquet shard (RAM-safe)
+  wave_rows: 6000            # upload a bunch every ~this many rows (small = fast, crash-safe).
+                             # ~6k FLAC clips ≈ ~2 GB/bunch, writes in ~30s and uploads. Lower
+                             # if runs get interrupted a lot; the Hub file count grows but that's fine.
+  raw_target_shards: 24      # (legacy hint; wave_rows drives actual bunching now)
+  mimi_target_shards: 24     # compact local mimi shards into ~this many `mimi` bunches on Hub
+  bunch_soft_gb: 6.0         # warn (don't fail) if a bunch parquet exceeds this size
+
+  # Hub politeness (rule 9): 128 commits/hour, 1000 download requests / 5 min.
+  commit_min_interval_s: 30  # min seconds between Hub commits (128/hr => >=28.2s)
+  push: true
+
+# ------------------------------------------------------------------ augmentation (SCALE-UP; OFF in Phase 1)
+# Phase 1 does NOT store augmented data — it uses only on-the-fly SpecAugment
+# (train.spec_time_mask) so the "does Lumma learn?" signal stays clean.
+#
+# When you scale up, set enabled:true. Augmentation happens in the WAVEFORM domain
+# at fetch time (BEFORE Mimi encode — you cannot acoustically augment codes), so each
+# variant becomes different Mimi codes. Then encode ALL variants to `mimi`. This 3x
+# is the Kaldi/ESPnet standard and does NOT overfit (same text, different acoustics
+# = regularization). See ARCHITECTURE.md §Augmentation.
+augment:
+  enabled: false             # Phase 1: keep false
+  per_clip_variants: 2       # + original => 3x. original + 1 noise + 1 speed.
+  speed_factors: [0.9, 1.1]
+  noise_snr_db: [5, 20]      # additive noise (needs a noise corpus: DNS/MUSAN)
+  telephone_frac: 0.15       # 300-3400 Hz bandpass (phone calls)
+  reverb_frac: 0.15          # room impulse responses (needs a RIR corpus)
+  # (silence injection is a LIVE Phase-1 feature — see data.silence_frac above)
+
+# ------------------------------------------------------------------ audio frontend (the A/B knob)
+# The Phase-1 experiment: does the per-frame summed embedding match flattened?
+#   per_frame_sum : sum embeddings of `codebooks` codebooks -> 1 vector / frame (12.5 tok/s)
+#   flatten       : interleave `codebooks` codebook embeddings -> K vectors / frame
+audio:
+  frontend: per_frame_sum    # per_frame_sum | flatten
+  codebooks: 8               # per_frame_sum: use c0..c7 ; flatten: recommended 4 (c0..c3)
+  projector: mlp             # none | linear | mlp  (adapts audio embeds into Lumma's manifold)
+  proj_dropout: 0.0
+
+# ------------------------------------------------------------------ model I/O geometry
+model:
+  max_audio_frames: 750      # 60 s @ 12.5 Hz
+  max_text_tokens: 200
+  # max_seq_len is derived at runtime from the frontend:
+  #   per_frame_sum: ~ max_audio_frames + max_text_tokens + markers
+  #   flatten:       ~ max_audio_frames*codebooks + max_text_tokens + markers
+
+# ------------------------------------------------------------------ training
+train:
+  epochs: 2
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  per_device_batch_size: 16
+  grad_accum: 8              # effective batch = 128
+  max_steps: 0              # 0 = use epochs
+  logging_steps: 20
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 3
+  gradient_checkpointing: false
+  num_workers: 8
+  bf16: true
+  max_grad_norm: 1.0
+  label_smoothing: 0.0
+  early_stopping_patience: 4
+  freeze_base_steps: 0       # >0 = warm up the audio frontend with the LM frozen first
+  push_to_hub: true
+  push_checkpoints: true
+  hub_ckpt_every: 2000
+  # SpecAugment on the Mimi codes (on-the-fly regularization, not data augmentation)
+  spec_time_mask: 10         # mask up to N consecutive frames (0 disables)
+  spec_time_blocks: 1
+
+# ------------------------------------------------------------------ eval
+eval:
+  max_samples: 500           # cap eval-set size for speed
+  subset_samples: 160        # live WER during training (smaller = faster)
+  max_new_tokens: 200
+  batch_size: 16
+  # Phase-1 decision gate on test-clean-ish WER (see ARCHITECTURE.md §Phase-1 gate)
+  wer_pass: 0.15             # <=15% -> pipeline works, proceed
+  wer_broken: 0.60           # >60%  -> pipeline is broken, debug before anything else
+
+# ------------------------------------------------------------------ streaming inference
+stream:
+  chunk_ms: 480              # decode hop
+  max_context_s: 30
+  eos_threshold: 0.85
+  pre_llm_threshold: 0.30
+  silence_ms: 800
+  silence_rms: 0.01
+  repetition_penalty: 1.3
+  no_repeat_ngram_size: 3
+  denoise: true
