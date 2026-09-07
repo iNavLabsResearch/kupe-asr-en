@@ -81,6 +81,12 @@ def encode(cfg) -> str:
 
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    try:                                    # fast multithreaded downloads if installed
+        import hf_transfer  # noqa: F401
+        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        log.info("hf_transfer enabled -> fast parallel downloads")
+    except Exception:
+        log.info("tip: `pip install hf_transfer` for much faster bunch downloads")
     ensure_repo(cfg.repos.data, "dataset")
     token = require_token()
     P = _paths(cfg)
