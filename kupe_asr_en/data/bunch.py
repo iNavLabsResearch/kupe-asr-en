@@ -22,6 +22,24 @@ def _total_rows(shard_paths: list[str]) -> int:
     return sum(pq.ParquetFile(p).metadata.num_rows for p in shard_paths)
 
 
+def _readable_shards(shard_paths: list[str]) -> list[str]:
+    """Drop (and delete) any shard parquet left corrupt by a crash mid-write, so
+    compaction never dies on a truncated file. Lost clips are re-fetchable / silence
+    is regenerable, so removing a bad shard is safe."""
+    good = []
+    for p in shard_paths:
+        try:
+            pq.ParquetFile(p).metadata.num_rows
+            good.append(p)
+        except Exception as e:
+            log.warning("dropping corrupt shard %s (%s)", os.path.basename(p), e)
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    return good
+
+
 def compact_to_bunches(shard_paths: list[str], out_dir: str, target_shards: int,
                        start_index: int = 0, batch_rows: int = 512,
                        soft_gb: float = 6.0) -> list[str]:
@@ -31,6 +49,7 @@ def compact_to_bunches(shard_paths: list[str], out_dir: str, target_shards: int,
     count; a warning fires if a bunch exceeds `soft_gb` (raise target_shards or use
     audio_format=opus if so).
     """
+    shard_paths = _readable_shards(shard_paths)
     if not shard_paths:
         return []
     os.makedirs(out_dir, exist_ok=True)
