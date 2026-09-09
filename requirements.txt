@@ -1,6 +1,8 @@
 # --- core ML ---
-# Install torch FIRST, matched to your CUDA. Example (CUDA 12.4):
-#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# Install the torch TRIO FIRST, matched to CUDA 12.4. The FastConformer track needs
+# exactly this trio (NeMo 2.0.0 + torchaudio must match torch):
+#   pip install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 \
+#     --index-url https://download.pytorch.org/whl/cu124
 torch>=2.4
 
 # Lumma-0.6B-Base ships custom modeling code that REQUIRES transformers 5.4.0.
@@ -26,18 +28,22 @@ python-dotenv>=1.0
 pyyaml>=6.0
 tqdm>=4.66
 numpy>=1.24
+matplotlib>=3.7           # NeMo utilities + any plotting
+hf_transfer>=0.1          # fast parallel Hub downloads (HF_XET_HIGH_PERFORMANCE / hf_transfer)
 
-# --- FastConformer + Nandi track (scripts 12/13) ---
-# NeMo provides the FastConformer encoder. USE THE DOCKERFILE — it pins the only
-# working combo (torch 2.4.1 + nemo 2.0.0). If installing by hand, that exact pair
-# is mandatory: NeMo 3.x needs torch>=2.6 (uses nn.Buffer) and will not import on
-# the torch-2.4 stack. Do NOT `pip install nemo_toolkit[asr]` unpinned — it pulls a
-# torch-2.6/cu13 nightly and breaks torchaudio/torchvision.
-#   pip install "nemo_toolkit[asr]==2.0.0"
-# nemo_toolkit[asr]==2.0.0
+# --- FastConformer + Nandi track (scripts 12/13) — PINNED, load-bearing ---
+# NeMo provides the FastConformer encoder. These three pins are the ONLY combo that
+# imports on the torch-2.4.1 trio above, and they fix the two failures we hit:
+#   * NeMo 3.x uses torch.nn.Buffer  -> needs torch>=2.6  => pin nemo to 2.0.0
+#   * new pytorch-lightning dropped NeptuneLogger, which NeMo imports
+#                                    -> pin lightning + pytorch-lightning to 2.4.0
+# Do NOT `pip install nemo_toolkit[asr]` unpinned — it pulls a torch-2.6/cu13 nightly
+# that breaks torchaudio/torchvision. Install the torch trio first, then this file.
+nemo_toolkit[asr]==2.0.0
+pytorch-lightning==2.4.0
+lightning==2.4.0
 
 # --- optional ---
-hf_transfer>=0.1          # fast parallel Hub downloads for encode
 # pyrnnoise>=0.4.0       # RNNoise before streaming ASR (mic demo); passthrough if absent
 # sounddevice>=0.4       # live mic demo (scripts/06_mic_stream.py)
 # gradio>=4.44           # Kaggle demo: scripts/10_gradio_kaggle.py
