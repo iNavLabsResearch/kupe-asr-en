@@ -21,9 +21,21 @@ MIMI_MAX_CODEBOOKS = 8           # c0 semantic + c1..c7 acoustic (what we encode
 # --------------------------------------------------------------------------
 LUMMA_REQUIRED_TRANSFORMERS = "5.4.0"
 
-# Dataset config (== HF `name`) for the two loadable views of the data repo.
+# Dataset config (== HF `name`) for the loadable views of the data repo.
 CONFIG_RAW = "raw"      # resampled 24 kHz audio (flac/opus bytes) — encode reads this
-CONFIG_MIMI = "mimi"    # Mimi c0..c7 codes + text — train reads this
+CONFIG_MIMI = "mimi"    # Mimi c0..c7 codes + text — Lumma/Nandi-on-codes train reads this
+CONFIG_FC = "fc"        # FastConformer encoder features + text — fc_train reads this
+
+# --------------------------------------------------------------------------
+# FastConformer encoder geometry (nvidia/stt_en_fastconformer_hybrid_large_pc).
+# 16 kHz in; 8x depthwise subsampling of 10 ms mel frames -> 80 ms/frame = 12.5 fps
+# (same frame rate as Mimi, by coincidence). d_model = 512 (discovered at runtime,
+# never hardcoded into the projection — see fc_frontend).
+# --------------------------------------------------------------------------
+FC_SAMPLE_RATE = 16_000
+FC_FRAME_RATE = 12.5
+FC_DEFAULT_ID = "nvidia/stt_en_fastconformer_hybrid_large_pc"
+NANDI_DECODER_ID = "FrontiersMind/Nandi-Mini-150M"
 
 # Splits carried in every row so the split is fixed once, at fetch time.
 SPLIT_TRAIN = "train"

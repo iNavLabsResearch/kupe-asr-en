@@ -1,4 +1,7 @@
-.PHONY: setup check-base repos fetch fetch-status check encode encode-status train train-flatten eval mic all
+.PHONY: setup check-base repos fetch fetch-status check encode encode-status train train-flatten eval mic all \
+        fc-encode fc-encode-status fc-train fc-train-ft fc-smoke
+
+FC_CFG = configs/fastconformer_nandi.yaml
 
 setup:
 	pip install -r requirements.txt
@@ -42,3 +45,24 @@ mic:
 
 # full Phase-1 pipeline on one box
 all: repos fetch check encode train
+
+# ---------------------------------------------------------------------------
+# FastConformer encoder + Nandi-Mini-150M track (reuses the same `raw` audio)
+#   stage 1: fc-encode  (multi-GPU, raw -> `fc` features)   -- do once
+#   stage 2: fc-train   (projector + Nandi decoder)         -- run many times
+# ---------------------------------------------------------------------------
+fc-smoke:                     # offline: no downloads, no GPU
+	python scripts/14_fc_smoke.py
+
+fc-encode:
+	python scripts/12_fc_encode.py --config $(FC_CFG)
+
+fc-encode-status:
+	python scripts/12_fc_encode.py --config $(FC_CFG) --status
+
+fc-train:
+	python scripts/13_fc_train.py --config $(FC_CFG)
+
+# projector + decoder + LIGHT encoder fine-tune (re-encodes `raw` on the fly)
+fc-train-ft:
+	python scripts/13_fc_train.py --config $(FC_CFG) --finetune-encoder --lr 1e-5

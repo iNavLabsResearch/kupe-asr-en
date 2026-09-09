@@ -12,8 +12,8 @@ import os
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..constants import (CONFIG_MIMI, CONFIG_RAW, SPLIT_TEST, SPLIT_TRAIN,
-                         SPLIT_VAL)
+from ..constants import (CONFIG_FC, CONFIG_MIMI, CONFIG_RAW, SPLIT_TEST,
+                         SPLIT_TRAIN, SPLIT_VAL)
 from ..env import log
 
 # ------------------------------------------------------------------- schemas
@@ -30,7 +30,16 @@ MIMI_SCHEMA = pa.schema([
     ("codes", pa.list_(pa.list_(pa.int32()))),   # codebook-major [num_cb][num_frames]
 ])
 
-SCHEMAS = {CONFIG_RAW: RAW_SCHEMA, CONFIG_MIMI: MIMI_SCHEMA}
+# FastConformer encoder features. `feats` holds a float16 [num_frames, feat_dim]
+# array as raw little-endian bytes (compact + robust; parquet float16 support is
+# spotty). Reader = np.frombuffer(feats, "<f2").reshape(num_frames, feat_dim).
+FC_SCHEMA = pa.schema([
+    ("id", pa.string()), ("source", pa.string()), ("text", pa.string()),
+    ("duration", pa.float32()), ("split", pa.string()),
+    ("num_frames", pa.int32()), ("feat_dim", pa.int32()), ("feats", pa.binary()),
+])
+
+SCHEMAS = {CONFIG_RAW: RAW_SCHEMA, CONFIG_MIMI: MIMI_SCHEMA, CONFIG_FC: FC_SCHEMA}
 VALID_SPLITS = {SPLIT_TRAIN, SPLIT_VAL, SPLIT_TEST}
 
 

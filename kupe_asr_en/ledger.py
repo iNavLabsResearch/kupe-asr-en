@@ -177,3 +177,14 @@ def new_mimi_ledger(cfg) -> dict:
         "next_shard_index": 0, "next_bunch_index": 0,
         "updated": iso_now(),
     }
+
+
+def new_fc_ledger(cfg) -> dict:
+    return {
+        "project": cfg.project, "stage": "fc",
+        "encoder_id": cfg.base.encoder_id, "feat_dim": 0,
+        "raw_files_done": [], "encoded_hours": 0.0, "clips": 0,
+        "shards": {"local": 0, "hub_bunches": 0, "bunch_files": []},
+        "next_shard_index": 0, "next_bunch_index": 0,
+        "updated": iso_now(),
+    }

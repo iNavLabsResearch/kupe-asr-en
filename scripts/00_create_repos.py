@@ -45,6 +45,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--private", action="store_true")
+    ap.add_argument("--skip-data-card", action="store_true",
+                    help="reuse an existing data repo: create runs/model only, don't reseed its card")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -53,11 +55,12 @@ def main():
     ensure_repo(cfg.repos.runs, "model", private=args.private)
     ensure_repo(cfg.repos.model, "model", private=args.private)
 
-    card = CARD.format(project=cfg.project, repo=cfg.repos.data, fmt=cfg.data.audio_format)
-    with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "README.md")
-        open(p, "w", encoding="utf-8").write(card)
-        upload_file(p, cfg.repos.data, "dataset", "README.md", "seed data card")
+    if not args.skip_data_card:
+        card = CARD.format(project=cfg.project, repo=cfg.repos.data, fmt=cfg.data.audio_format)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "README.md")
+            open(p, "w", encoding="utf-8").write(card)
+            upload_file(p, cfg.repos.data, "dataset", "README.md", "seed data card")
     log.info("repos ready: %s | %s | %s", cfg.repos.data, cfg.repos.runs, cfg.repos.model)
 
 

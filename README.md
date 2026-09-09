@@ -199,3 +199,71 @@ Public weights, **no HF token**. Accelerator: **GPU T4×2** (pipeline: Mimi on
 
 Open the printed `https://*.gradio.live` URL. Upload audio → **Full file** (whole
 clip) or **Realtime chunks** (growing transcript + RTF).
+
+---
+
+## FastConformer encoder + Nandi-Mini-150M track
+
+A second architecture that reuses the **same 3000 h `raw` audio** on the Hub but
+replaces the Mimi-codes frontend with a pretrained acoustic encoder:
+
+```
+raw 24 kHz audio
+  ──[stage 1: fc-encode]──▶  NVIDIA FastConformer encoder  ──▶  features (12.5 fps, D=512)
+  ──[stage 2: fc-train]───▶  projector + Nandi-Mini-150M   ──▶  English text
+```
+
+- Encoder: [`nvidia/stt_en_fastconformer_hybrid_large_pc`](https://huggingface.co/nvidia/stt_en_fastconformer_hybrid_large_pc) (NeMo; 16 kHz in)
+- Decoder: [`FrontiersMind/Nandi-Mini-150M`](https://huggingface.co/FrontiersMind/Nandi-Mini-150M) (transformers==5.4.0)
+
+Data loading, encoding, and training are **three distinct, parallelizable steps**
+(fetch → fc-encode → fc-train), each resumable via its own ledger and reading only
+from the Hub. Config: [`configs/fastconformer_nandi.yaml`](configs/fastconformer_nandi.yaml).
+
+**Install the encoder** (only on the GPU box that encodes / fine-tunes):
+
+```bash
+pip install "nemo_toolkit[asr]>=1.23"
+```
+
+**Offline sanity check first** (no downloads, no GPU — validates the whole assembly):
+
+```bash
+make fc-smoke        # == python scripts/14_fc_smoke.py
+```
+
+### Stage 1 — encode features (multi-GPU, run once)
+
+Converts the `raw` config into a new `fc` config of FastConformer features. Uses
+**all visible GPUs** (round-robin, OOM auto-split), streams downloads/decode/encode/
+upload in a pipeline, and is resumable per raw bunch. Run in tmux.
+
+```bash
+make fc-encode                                   # or: python scripts/12_fc_encode.py
+python scripts/12_fc_encode.py --status          # progress (hours encoded, bunches left)
+```
+
+### Stage 2 — train the projector + decoder
+
+Loads the `fc` features + Nandi-Mini-150M, warms up the projector alone
+(`train.freeze_base_steps`), then unfreezes the decoder, and optimizes for low WER.
+Refuses to start below `data.min_hours` (lower it in the YAML for a small run).
+
+```bash
+make fc-train                                    # or: python scripts/13_fc_train.py
+python scripts/13_fc_train.py --epochs 3 --bs 32 --lr 3e-4
+accelerate launch scripts/13_fc_train.py         # multi-GPU DDP
+```
+
+**Optional light encoder fine-tuning** — re-encodes `raw` waveforms on the fly so
+gradients flow through FastConformer (use a small LR):
+
+```bash
+make fc-train-ft                                 # --finetune-encoder --lr 1e-5
+```
+
+Weights (Nandi decoder in `kupe-lm/`, projector `frontend.pt`, optional
+`encoder_finetuned.pt`, `asr_config.json`) plus eval reports and ledgers are pushed
+to `{owner}/kupe-asr-en-fastConformer` (final model) and
+`{owner}/kupe-asr-en-fastConformer-runs` (per-run checkpoints + evals). Reload with
+`FastConformerASR.load(model_dir, with_encoder=<bool>)`.

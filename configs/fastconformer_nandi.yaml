@@ -1,0 +1,141 @@
+# =========================================================================
+# kupe-asr-en — FastConformer encoder + Nandi-Mini-150M decoder
+#
+# Encoder-decoder English ASR:
+#   raw 24 kHz audio
+#     -> [fc-encode step]  NVIDIA FastConformer encoder -> continuous features (12.5 fps, D=512)
+#     -> [train step]      projector + Nandi-Mini-150M decode English text
+#
+# Two DISTINCT, parallelizable stages (see README §FastConformer track):
+#   1. scripts/12_fc_encode.py  — multi-GPU, converts `raw` -> the `fc` config
+#   2. scripts/13_fc_train.py   — trains projector + decoder (+ optional light encoder FT)
+# `{owner}` is filled from HF_OWNER.
+# =========================================================================
+project: kupe-asr-en-fastConformer
+owner: anuj-inavlabs          # overridden by env HF_OWNER / HF_USERNAME
+seed: 1337
+
+repos:
+  data: "{owner}/kupe-asr-en-data"                    # SAME `raw` audio, reused; adds an `fc` config
+  runs: "{owner}/kupe-asr-en-fastConformer-runs"      # every training run: checkpoints + eval + ledgers
+  model: "{owner}/kupe-asr-en-fastConformer"          # latest/best model weights
+
+paths:
+  root:          "./artifacts"
+  raw_dir:       "./artifacts/data/raw"      # local mirror of the `raw` config
+  mimi_dir:      "./artifacts/data/mimi"     # (unused by this track)
+  fc_dir:        "./artifacts/data/fc"       # local mirror of the `fc` (features) config
+  runs_dir:      "./artifacts/runs"
+  ledger_dir:    "./artifacts/ledger"        # data.json / fc.json (mirrored to Hub)
+
+# ------------------------------------------------------------------ base models
+base:
+  encoder_id: nvidia/stt_en_fastconformer_hybrid_large_pc   # NeMo FastConformer (16 kHz)
+  decoder_id: FrontiersMind/Nandi-Mini-150M                 # causal LM decoder
+  # Nandi ships custom modeling code (Lumma family) that REQUIRES transformers==5.4.0.
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_impl: sdpa            # or flash_attention_2 if installed on the GPU box
+
+# ------------------------------------------------------------------ fc-encode (stage 1)
+fc:
+  batch_max_frames: 8000     # sum-of-frames VRAM budget per encode batch PER GPU
+  prefetch: 1                # raw bunches kept downloaded ahead of the GPUs
+  decode_workers: 16         # threads decoding FLAC bytes -> waveforms
+  decode_chunk: 3000         # clips decoded into RAM before a GPU batch
+  fc_rows: 20000             # `fc` rows per uploaded bunch (features are larger than codes)
+  push: true
+
+# ------------------------------------------------------------------ encoder fine-tuning (stage 2, optional)
+encoder:
+  finetune: false            # true = LIGHT encoder fine-tune (re-encodes `raw` on the fly,
+                             # grad flows through FastConformer; use a low lr, e.g. 1e-5)
+
+# ------------------------------------------------------------------ data (English only)
+data:
+  languages: [en]
+  target_sr: 24000           # `raw` storage rate; fc-encode resamples to 16 kHz for the encoder.
+  audio_format: flac
+  opus_bitrate: 24000
+  target_hours: 3000
+  min_hours: 2500            # pipeline REFUSES to train below this (lower for a smoke run).
+  source_caps:
+    librispeech: 960
+    peoples_speech: 2100
+    svarah: 12
+    gigaspeech: 0
+  min_dur: 1.0
+  max_dur: 20.0
+  val_hours: 5.0
+  test_hours: 5.0
+  silence_frac: 0.05
+  silence_min_dur: 2.0
+  silence_max_dur: 5.0
+  silence_val_cap: 60
+  shard_rows: 1000
+  wave_rows: 6000
+  raw_target_shards: 24
+  mimi_target_shards: 24
+  bunch_soft_gb: 6.0
+  commit_min_interval_s: 30
+  push: true
+
+# ------------------------------------------------------------------ audio frontend (the projector)
+# FastConformer features are CONTINUOUS, so there is no per_frame_sum/flatten A/B and
+# no `codebooks`. The only knob is the projector that maps D_enc -> Nandi's embed dim.
+audio:
+  projector: mlp             # linear | mlp
+  proj_dropout: 0.1
+
+# ------------------------------------------------------------------ model I/O geometry
+model:
+  max_audio_frames: 750      # 60 s @ 12.5 fps
+  max_text_tokens: 200
+
+# ------------------------------------------------------------------ training
+train:
+  epochs: 2
+  lr: 3.0e-4                 # projector + decoder; encoder fine-tune should override to ~1e-5
+  min_lr_ratio: 0.1
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  per_device_batch_size: 24  # features are cheaper than flattened codes -> larger batch ok
+  grad_accum: 6              # effective batch = 144
+  max_steps: 0
+  logging_steps: 20
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 3
+  gradient_checkpointing: false
+  num_workers: 8
+  bf16: true
+  max_grad_norm: 1.0
+  label_smoothing: 0.0
+  early_stopping_patience: 4
+  freeze_base_steps: 1000    # train the projector alone first, then unfreeze the decoder
+  push_to_hub: true
+  push_checkpoints: true
+  hub_ckpt_every: 2000
+  spec_time_mask: 10         # SpecAugment on the features (on-the-fly regularization)
+  spec_time_blocks: 1
+
+# ------------------------------------------------------------------ eval
+eval:
+  max_samples: 500
+  subset_samples: 160
+  max_new_tokens: 200
+  batch_size: 16
+  wer_pass: 0.15             # <=15% -> pipeline works
+  wer_broken: 0.60          # >60%  -> pipeline is broken, debug first
+
+# ------------------------------------------------------------------ streaming inference
+stream:
+  chunk_ms: 480
+  max_context_s: 30
+  eos_threshold: 0.85
+  pre_llm_threshold: 0.30
+  silence_ms: 800
+  silence_rms: 0.01
+  repetition_penalty: 1.3
+  no_repeat_ngram_size: 3
+  denoise: true
