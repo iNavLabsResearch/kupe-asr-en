@@ -262,17 +262,37 @@ def encode(cfg) -> str:
     # ---- main GPU consumer ----
     processed, base, total = 0, len(done), len(raw_bunches)
     hours = float(led.d["encoded_hours"])
+    hours0 = hours
     t0 = time.time()
+    gpu_audio_s = 0.0        # audio seconds pushed through FastConformer
+    gpu_time_s = 0.0         # wall seconds actually spent in the GPU encode call
+    last_log = 0.0
     while True:
         item = batchq.get()
         if item is _DONE:
             break
         if item[0] == "batch":
             _, arrays, srs, metas = item
+            aud = sum(m["duration"] for m in metas)
+            tb = time.time()
             gpu_encode(arrays, srs, metas)
-            hours += sum(m["duration"] for m in metas) / 3600.0
+            dt = time.time() - tb
+            gpu_audio_s += aud
+            gpu_time_s += dt
+            hours += aud / 3600.0
             led.d["clips"] += len(metas)
             led.d["encoded_hours"] = round(hours, 4)
+            now = time.time()                          # live RTFx (throttled every 5s)
+            if now - last_log >= 5:
+                last_log = now
+                el = max(1e-6, now - t0)
+                rtfx_now = aud / dt if dt > 0 else 0.0             # this batch
+                rtfx_avg = gpu_audio_s / gpu_time_s if gpu_time_s > 0 else 0.0
+                gpu_busy = 100.0 * gpu_time_s / el                # low => decode-bound
+                wall_hph = (hours - hours0) / (el / 3600.0)       # audio-h encoded / wall-h
+                log.info("  RTFx now=%.0fx avg=%.0fx | GPU busy %.0f%% | %.1f audio-h/wall-h | "
+                         "%.1f h done, %d clips", rtfx_now, rtfx_avg, gpu_busy, wall_hph,
+                         hours, led.d["clips"])
         else:                                          # a raw bunch finished
             af = item[1]
             led.d["raw_files_done"] = sorted(set(led.d["raw_files_done"]) | {af})

@@ -39,14 +39,14 @@ base:
 
 # ------------------------------------------------------------------ fc-encode (stage 1)
 fc:
-  batch_max_frames: 96000    # sum-of-frames VRAM budget per encode batch PER GPU.
-                             # 96GB (RTX PRO 6000 / H100-80G+) easily fits this. Lower to
-                             # ~24000 on a 24GB card. Encode is often CPU/decode-bound though,
-                             # so bump decode_workers to match `nproc` before chasing this.
-  prefetch: 3                # raw bunches kept downloaded ahead of the GPU (needs disk headroom)
-  decode_workers: 48         # threads decoding FLAC bytes -> waveforms; set ~= `nproc`.
-                             # THIS is the main throughput lever — encode is decode/IO-bound.
-  decode_chunk: 12000        # clips decoded into RAM before a GPU batch (keeps the big GPU fed)
+  batch_max_frames: 24000    # sum-of-frames VRAM budget per encode batch PER GPU.
+                             # 24000 fits a 24GB L4. Raise to 96000 on 80-96GB cards.
+                             # Encode is CPU/decode-bound anyway (watch the "GPU busy %" the
+                             # encoder now prints) — decode_workers is the real lever.
+  prefetch: 2                # raw bunches kept downloaded ahead of the GPU (needs disk headroom)
+  decode_workers: 16         # threads decoding FLAC bytes -> waveforms; set ~= `nproc`.
+                             # L4 pods usually have ~12-24 vCPUs — match yours.
+  decode_chunk: 6000         # clips decoded into RAM before a GPU batch (keeps the GPU fed)
   fc_rows: 20000             # `fc` rows per uploaded bunch (features are larger than codes)
   push: true
 
@@ -103,8 +103,8 @@ train:
   min_lr_ratio: 0.1
   warmup_ratio: 0.03
   weight_decay: 0.01
-  per_device_batch_size: 96  # 96GB VRAM: features are cheap, push it. Lower on smaller cards.
-  grad_accum: 2              # effective batch = 192 (per_device * grad_accum * num_gpus)
+  per_device_batch_size: 24  # 24GB L4 fits this for features. Raise to 96 on 80-96GB cards.
+  grad_accum: 6              # effective batch = 144 (per_device * grad_accum * num_gpus)
   max_steps: 0
   logging_steps: 20
   eval_steps: 500
