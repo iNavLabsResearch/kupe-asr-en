@@ -267,3 +267,37 @@ Weights (Nandi decoder in `kupe-lm/`, projector `frontend.pt`, optional
 to `{owner}/kupe-asr-en-fastConformer` (final model) and
 `{owner}/kupe-asr-en-fastConformer-runs` (per-run checkpoints + evals). Reload with
 `FastConformerASR.load(model_dir, with_encoder=<bool>)`.
+
+---
+
+## Docker (recommended for the FastConformer track)
+
+The NeMo dependency stack is brittle: NeMo 3.x needs torch ≥ 2.6 while the
+matched `torchaudio`/`torchvision` on most CUDA boxes are 2.4.1, and an unpinned
+`pip install nemo_toolkit[asr]` pulls a torch-2.6/cu13 nightly that breaks both.
+The [`Dockerfile`](Dockerfile) pins the one combo that imports cleanly —
+**torch 2.4.1 + NeMo 2.0.0 + transformers 5.4.0** — on top of the official
+`pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` base (which already ships the
+matched torch trio). The build runs `scripts/14_fc_smoke.py` as its final gate,
+so a green build means the stack works.
+
+```bash
+git pull origin main
+docker build -t kupe-asr-fc .
+
+docker run --gpus all -it --rm \
+  -e HF_TOKEN=hf_xxx -e WANDB_API_KEY=xxx -e HF_OWNER=anuj-inavlabs \
+  -v "$PWD/artifacts:/kupe-asr-en/artifacts" \
+  kupe-asr-fc
+```
+
+Inside the container the whole pipeline just runs (tmux is preinstalled):
+
+```bash
+python scripts/00_create_repos.py --config configs/fastconformer_nandi.yaml --skip-data-card
+python scripts/12_fc_encode.py    --config configs/fastconformer_nandi.yaml     # stage 1
+python scripts/13_fc_train.py     --config configs/fastconformer_nandi.yaml --bs 64 --grad-accum 2   # stage 2
+```
+
+Mounting `-v $PWD/artifacts:...` keeps encoded features, checkpoints, and ledgers
+on the host so a container restart resumes instead of recomputing.

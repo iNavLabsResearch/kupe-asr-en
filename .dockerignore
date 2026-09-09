@@ -1,0 +1,13 @@
+.git
+artifacts
+reports
+release
+videos
+**/__pycache__
+*.pyc
+*.pyo
+.env
+.venv
+*.log
+.DS_Store
+base_check_results.json

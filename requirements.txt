@@ -28,9 +28,13 @@ tqdm>=4.66
 numpy>=1.24
 
 # --- FastConformer + Nandi track (scripts 12/13) ---
-# NeMo provides the FastConformer encoder. Heavy; install only on the box that runs
-# fc-encode / --finetune-encoder:  pip install "nemo_toolkit[asr]>=1.23"
-# nemo_toolkit[asr]>=1.23
+# NeMo provides the FastConformer encoder. USE THE DOCKERFILE — it pins the only
+# working combo (torch 2.4.1 + nemo 2.0.0). If installing by hand, that exact pair
+# is mandatory: NeMo 3.x needs torch>=2.6 (uses nn.Buffer) and will not import on
+# the torch-2.4 stack. Do NOT `pip install nemo_toolkit[asr]` unpinned — it pulls a
+# torch-2.6/cu13 nightly and breaks torchaudio/torchvision.
+#   pip install "nemo_toolkit[asr]==2.0.0"
+# nemo_toolkit[asr]==2.0.0
 
 # --- optional ---
 hf_transfer>=0.1          # fast parallel Hub downloads for encode
