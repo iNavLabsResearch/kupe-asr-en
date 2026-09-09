@@ -39,10 +39,14 @@ base:
 
 # ------------------------------------------------------------------ fc-encode (stage 1)
 fc:
-  batch_max_frames: 8000     # sum-of-frames VRAM budget per encode batch PER GPU
-  prefetch: 1                # raw bunches kept downloaded ahead of the GPUs
-  decode_workers: 16         # threads decoding FLAC bytes -> waveforms
-  decode_chunk: 3000         # clips decoded into RAM before a GPU batch
+  batch_max_frames: 24000    # sum-of-frames VRAM budget per encode batch PER GPU
+                             # (24GB 4090/L4 fits this; raise to 32000 on 40GB+ cards).
+                             # encode is usually CPU/decode-bound, so bump decode_workers first.
+  prefetch: 2                # raw bunches kept downloaded ahead of the GPUs (needs disk headroom)
+  decode_workers: 32         # threads decoding FLAC bytes -> waveforms; set ~= `nproc`.
+                             # THIS is the main throughput lever — encode is decode/IO-bound,
+                             # the GPU is mostly idle. More vCPUs = faster.
+  decode_chunk: 6000         # clips decoded into RAM before a GPU batch (keeps the GPU fed)
   fc_rows: 20000             # `fc` rows per uploaded bunch (features are larger than codes)
   push: true
 
