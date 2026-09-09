@@ -46,4 +46,4 @@ lightning==2.4.0
 # --- optional ---
 # pyrnnoise>=0.4.0       # RNNoise before streaming ASR (mic demo); passthrough if absent
 # sounddevice>=0.4       # live mic demo (scripts/06_mic_stream.py)
-# gradio>=4.44           # Kaggle demo: scripts/10_gradio_kaggle.py
+gradio>=4.44             # inference apps: scripts/10_gradio_kaggle.py + scripts/15_fc_gradio.py
