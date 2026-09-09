@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from ..audio import decode_bytes
-from ..constants import CONFIG_FC, CONFIG_RAW, FC_FRAME_RATE
+from ..constants import CONFIG_FC, CONFIG_RAW, FC_FRAME_RATE, FC_SAMPLE_RATE
 from ..env import ensure_repo, hf_token, log, require_token
 from ..hub import CommitPacer, list_config_parquets, next_bunch_index
 from ..ledger import Ledger, new_fc_ledger
@@ -227,10 +227,22 @@ def encode(cfg) -> str:
     # ---- decoder thread ----
     batchq: queue.Queue = queue.Queue(maxsize=max(2, 2 * nd))
 
+    import librosa
+    fc_sr = FC_SAMPLE_RATE
+
     def _decode(rec):
         try:
             a, sr = decode_bytes(rec["audio_bytes"])
-            return (np.asarray(a, np.float32) if a is not None else None), sr, rec
+            if a is None:
+                return None, None, rec
+            a = np.asarray(a, np.float32)
+            # Resample to 16 kHz HERE, in the parallel decode pool, instead of serially
+            # in the single GPU-feeder thread — this is the throughput lever when the GPU
+            # is only ~20-50% busy (decode/resample-bound). soxr_hq is fast + ASR-clean.
+            if sr != fc_sr:
+                a = librosa.resample(a, orig_sr=sr, target_sr=fc_sr, res_type="soxr_hq")
+                sr = fc_sr
+            return a, sr, rec
         except Exception:
             return None, None, rec
 
