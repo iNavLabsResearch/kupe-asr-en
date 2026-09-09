@@ -227,22 +227,13 @@ def encode(cfg) -> str:
     # ---- decoder thread ----
     batchq: queue.Queue = queue.Queue(maxsize=max(2, 2 * nd))
 
-    import librosa
-    fc_sr = FC_SAMPLE_RATE
-
     def _decode(rec):
+        # FLAC-decode ONLY on the CPU pool; resampling 24k->16k is done on the (idle)
+        # GPU inside encode_arrays, so CPU cores are spent purely on decode -> the GPU
+        # gets fed faster and its utilisation climbs.
         try:
             a, sr = decode_bytes(rec["audio_bytes"])
-            if a is None:
-                return None, None, rec
-            a = np.asarray(a, np.float32)
-            # Resample to 16 kHz HERE, in the parallel decode pool, instead of serially
-            # in the single GPU-feeder thread — this is the throughput lever when the GPU
-            # is only ~20-50% busy (decode/resample-bound). soxr_hq is fast + ASR-clean.
-            if sr != fc_sr:
-                a = librosa.resample(a, orig_sr=sr, target_sr=fc_sr, res_type="soxr_hq")
-                sr = fc_sr
-            return a, sr, rec
+            return (np.asarray(a, np.float32) if a is not None else None), sr, rec
         except Exception:
             return None, None, rec
 

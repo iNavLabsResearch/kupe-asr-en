@@ -62,17 +62,42 @@ class FastConformerEncoder(torch.nn.Module):
     # ------------------------------------------------------------------ numpy path (encode step)
     @torch.inference_mode()
     def encode_arrays(self, arrays, srs, device: str, autocast: bool):
-        """List of float32 waveforms (+ per-clip sr) -> list of float16 [T, D] arrays."""
-        waves = [_resample(a, s) for a, s in zip(arrays, srs)]
-        lens = torch.tensor([w.shape[0] for w in waves], dtype=torch.long, device=device)
-        S = int(lens.max().item())
-        batch = torch.zeros(len(waves), S, dtype=torch.float32, device=device)
-        for i, w in enumerate(waves):
-            batch[i, : w.shape[0]] = torch.from_numpy(w).to(device)
+        """List of float32 waveforms (+ per-clip sr) -> list of float16 [T, D] arrays.
+
+        Resampling to 16 kHz is done ON THE GPU here (torchaudio), not on the CPU, so
+        the CPU decode pool only pays for FLAC decode. The `raw` config is uniform sr
+        (24 kHz), so the whole padded batch resamples in one GPU call; a rare mixed-sr
+        batch falls back to per-clip CPU resample.
+        """
+        import torchaudio.functional as AF
+
+        srs = [int(s) for s in srs]
+        if len(set(srs)) == 1:                                    # uniform sr -> GPU resample
+            sr0 = srs[0]
+            lens0 = [int(a.shape[0]) for a in arrays]
+            S = max(lens0)
+            batch = torch.zeros(len(arrays), S, dtype=torch.float32, device=device)
+            for i, a in enumerate(arrays):
+                batch[i, : a.shape[0]] = torch.from_numpy(np.asarray(a, np.float32)).to(device)
+            if sr0 != FC_SAMPLE_RATE:
+                batch = AF.resample(batch, sr0, FC_SAMPLE_RATE)   # on-GPU, whole batch
+                sc = FC_SAMPLE_RATE / sr0
+                lens = torch.tensor([max(1, int(round(l * sc))) for l in lens0],
+                                    dtype=torch.long, device=device)
+            else:
+                lens = torch.tensor(lens0, dtype=torch.long, device=device)
+        else:                                                     # mixed sr (rare) -> CPU fallback
+            waves = [_resample(a, s) for a, s in zip(arrays, srs)]
+            lens = torch.tensor([w.shape[0] for w in waves], dtype=torch.long, device=device)
+            S = int(lens.max().item())
+            batch = torch.zeros(len(waves), S, dtype=torch.float32, device=device)
+            for i, w in enumerate(waves):
+                batch[i, : w.shape[0]] = torch.from_numpy(w).to(device)
+
         ac = (torch.autocast("cuda", dtype=torch.float16) if autocast
               else torch.autocast("cpu", enabled=False))
         with ac:
             feats, flen = self.features(batch, lens)
         feats = feats.float().cpu().numpy()
         flen = flen.cpu().numpy()
-        return [feats[i, : int(flen[i])].astype(np.float16) for i in range(len(waves))]
+        return [feats[i, : int(flen[i])].astype(np.float16) for i in range(len(arrays))]
