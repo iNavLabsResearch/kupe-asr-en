@@ -149,8 +149,22 @@ def encode(cfg) -> str:
         pending_rows += nrows
         led.d["next_shard_index"] = idx + 1
 
+    # per-shard progress note: total clips + overall % (bunches + fraction of the
+    # current bunch, estimated from the running avg clips/bunch — so it moves every flush).
+    total_bunches = len(raw_bunches)
+    prog = {"bunches": len(done), "clips_at_bunch": int(led.d["clips"])}
+
+    def _flush_note():
+        bd = prog["bunches"]
+        clips = int(led.d["clips"])
+        avg = clips / bd if bd > 0 else max(clips, 1)
+        frac = min(1.0, (clips - prog["clips_at_bunch"]) / avg) if avg > 0 else 0.0
+        pct = 100.0 * (bd + frac) / max(1, total_bunches)
+        return f" | {clips:,} clips total | ~{pct:.1f}% done ({bd}/{total_bunches} bunches)"
+
     writer = ShardWriter(P["shards"], FC_SCHEMA, int(cfg.data.shard_rows),
-                         start_index=int(led.d.get("next_shard_index", 0)), on_flush=on_flush)
+                         start_index=int(led.d.get("next_shard_index", 0)),
+                         on_flush=on_flush, note_fn=_flush_note)
     for _, p in list_local_shards(P["shards"]):
         if p not in pending:
             pending.append(p); pending_rows += int(cfg.data.shard_rows)
@@ -301,11 +315,15 @@ def encode(cfg) -> str:
                 torch.cuda.empty_cache()
             _upload_wave()
             processed += 1
+            prog["bunches"] = base + processed          # advance the per-shard % baseline
+            prog["clips_at_bunch"] = int(led.d["clips"])
             el = max(1e-6, time.time() - t0)
             rate = processed / (el / 3600)
             eta = (len(todo) - processed) / rate if rate else 0
-            log.info("bunch %s done | %d/%d | %.1f h encoded | %.1f bunches/h | ETA %.1f h",
-                     os.path.basename(af), base + processed, total, led.d["encoded_hours"], rate, eta)
+            log.info("bunch %s done | %d/%d (%.1f%%) | %d clips | %.1f h encoded | %.1f bunches/h | ETA %.1f h",
+                     os.path.basename(af), base + processed, total,
+                     100.0 * (base + processed) / max(1, total), led.d["clips"],
+                     led.d["encoded_hours"], rate, eta)
 
     writer.close()
     _upload_wave(force=True)

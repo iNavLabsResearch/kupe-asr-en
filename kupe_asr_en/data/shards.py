@@ -45,12 +45,13 @@ VALID_SPLITS = {SPLIT_TRAIN, SPLIT_VAL, SPLIT_TEST}
 
 class ShardWriter:
     def __init__(self, out_dir: str, schema: pa.Schema, shard_rows: int,
-                 start_index: int = 0, on_flush=None):
+                 start_index: int = 0, on_flush=None, note_fn=None):
         self.out_dir = out_dir
         self.schema = schema
         self.shard_rows = int(shard_rows)
         self._next_idx = int(start_index)
         self.on_flush = on_flush          # (path, idx, nrows) -> None
+        self.note_fn = note_fn            # () -> str, appended to each flush log line
         self.rows: list[dict] = []
         os.makedirs(out_dir, exist_ok=True)
 
@@ -77,7 +78,13 @@ class ShardWriter:
         table = pa.Table.from_pylist(self.rows, schema=self.schema)
         pq.write_table(table, path, compression="zstd")
         self.rows = []
-        log.info("flushed %s (%d rows)", os.path.basename(path), n)
+        note = ""
+        if self.note_fn:
+            try:
+                note = self.note_fn() or ""
+            except Exception:
+                note = ""
+        log.info("flushed %s (%d rows)%s", os.path.basename(path), n, note)
         if self.on_flush:
             self.on_flush(path, idx, n)
 
